@@ -35,15 +35,21 @@ py -3.12 -m venv .venv
 .venv\Scripts\python -m app.main --browser  # or in your browser
 ```
 
-Build the distributable (folder build, about 380 MB because it includes the Claude CLI):
+### Releases (CI/CD)
 
-```bash
-.venv\Scripts\pyinstaller build.spec --noconfirm
-```
+Every push to `main` runs [`.github/workflows/build-and-publish.yml`](.github/workflows/build-and-publish.yml). It builds the Windows app on GitHub Actions, smoke-tests it, zips it, and publishes it with the download page ([`site/index.html`](site/index.html)) to **https://denamielleonardo.github.io/reviewkit/**, which is the only download location. Nothing is built locally.
 
-Then zip `dist\ReviewKit\` and share it.
+One-time repository setup:
+1. **Settings → Pages → Build and deployment → Source: GitHub Actions.**
+2. **Settings → Secrets and variables → Actions → New repository secret** named `REVIEWKIT_SKILLS_B64`. Its value is the base64 of a zip of the skill folders:
+   ```powershell
+   Compress-Archive -Path skills\* -DestinationPath skills.zip -Force
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes("skills.zip")) | Set-Clipboard
+   ```
 
-**Updating review rules:** replace the folders in `skills/` with the latest synced skills, rebuild, and redistribute. To add a new review type, add a skill folder and an entry in `app/skills.py` (`REVIEWS`), then add a button in `app/static/index.html`.
+The skills are built into the published app. The download page is public, so anyone with the link can download the app and extract the rules.
+
+**Updating review rules:** update the `REVIEWKIT_SKILLS_B64` secret with the new skills, then re-run the workflow (Actions → Build and publish ReviewKit → Run workflow) or push to `main`. To add a new review type, add a skill folder and an entry in `app/skills.py` (`REVIEWS`), then add a button in `app/static/index.html`.
 
 ### Layout
 

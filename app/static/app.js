@@ -211,6 +211,7 @@ function showStatic(slotName, entry) {
   p.entry = entry;
   p.setState("done");
   p.body.innerHTML = renderMarkdown(entry.markdown);
+  attachApply(p, entry);
   return p;
 }
 
@@ -231,7 +232,9 @@ async function streamReview(slotName, title, sub, request, runBtn) {
   let live = "";
   let tools = 0;
   let frame = 0;
-  const paint = () => { frame = 0; p.body.innerHTML = renderMarkdown(live); p.body.lastElementChild && p.body.lastElementChild.classList.add("cursor"); };
+  // The hidden REVIEW_POINTS block (TD reviews) is never shown while streaming.
+  const visible = () => { const i = live.indexOf("<!--"); return i >= 0 ? live.slice(0, i) : live; };
+  const paint = () => { frame = 0; p.body.innerHTML = renderMarkdown(visible()); p.body.lastElementChild && p.body.lastElementChild.classList.add("cursor"); };
 
   try {
     const res = await api(request.url, { method: "POST", body: request.body, signal: controller.signal });
@@ -263,6 +266,7 @@ async function streamReview(slotName, title, sub, request, runBtn) {
           now.textContent = `Finished in ${ev.seconds}s · ${tools} lookups`;
           p.setSub(`${sub} · ${ev.seconds}s`);
           toast("Review complete");
+          attachApply(p, ev.entry);
         } else if (ev.t === "error") {
           throw new Error(ev.v);
         }
@@ -320,6 +324,143 @@ $("#runTdBtn").onclick = () => {
   fd.append("notes", $("#tdNotes").value);
   streamReview("td", state.docx.name, "Technical Design", { url: "/api/review/td", body: fd }, $("#runTdBtn"));
 };
+
+// ---------- apply TD review points ----------
+const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
+const STATUS_LABEL = {
+  applied: "Applied", not_applicable: "Not applicable", needs_input: "Needs author input",
+  failed: "Not applied", open: "Open",
+};
+const sevClass = (s) => "sev sev-" + ((s || "").toLowerCase().match(/critical|high|medium|low/) || ["none"])[0];
+const escapeHtml = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function attachApply(panel, entry) {
+  if (!entry || entry.kind !== "td" || !(entry.points || []).length) return;
+  let box = $(".apply", panel.node);
+  if (!box) { box = document.createElement("div"); box.className = "apply"; panel.node.appendChild(box); }
+  const points = entry.points;
+  const done = points.some((p) => p.status && p.status !== "open");
+  if (done) return renderApplyResult(panel, box, entry, points);
+
+  box.innerHTML = `
+    <div class="apply-offer">
+      <div class="apply-icon"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5z"/><path d="M14 3v5h5M9 15l2 2 4-4"/></svg></div>
+      <div class="apply-text">
+        <b>Want ReviewKit to apply these review points to the document?</b>
+        <span class="muted small">You choose which points to apply. Edits follow your document's template and appear as tracked changes in a copy. Your original isn't modified.</span>
+      </div>
+      <div class="row">
+        <button class="btn ghost a-no">No thanks</button>
+        <button class="btn primary a-yes">Yes, choose points</button>
+      </div>
+    </div>`;
+  $(".a-no", box).onclick = () => { box.innerHTML = `<div class="apply-note muted small">OK, the document was left as is. You can apply points later from History.</div>`; };
+  $(".a-yes", box).onclick = () => renderApplySelect(panel, box, entry, points);
+}
+
+function renderApplySelect(panel, box, entry, points) {
+  const sorted = [...points].sort((a, b) => (SEV_ORDER[(a.severity || "").toLowerCase()] ?? 9) - (SEV_ORDER[(b.severity || "").toLowerCase()] ?? 9));
+  box.innerHTML = `
+    <div class="apply-head">
+      <div><b>Choose the review points to apply</b>
+        <div class="muted small">Untick anything that doesn't apply. Unticked points are marked <b>Not applicable</b>, and their parts of the document aren't touched.</div></div>
+      <div class="row"><button class="btn tiny ghost a-all">Select all</button><button class="btn tiny ghost a-none">Select none</button></div>
+    </div>
+    <div class="point-list">${sorted.map((p) => `
+      <label class="point">
+        <input type="checkbox" value="${escapeHtml(p.id)}" checked>
+        <div class="point-body">
+          <div class="point-top"><span class="${sevClass(p.severity)}">${escapeHtml(p.severity || "—")}</span>
+            <span class="point-id">${escapeHtml(p.id)}</span><b>${escapeHtml(p.title)}</b></div>
+          ${p.section ? `<div class="muted small">Section: ${escapeHtml(p.section)}</div>` : ""}
+          <div class="point-change">${escapeHtml(p.change)}</div>
+        </div>
+      </label>`).join("")}
+    </div>
+    <div class="apply-foot">
+      <span class="muted small a-count"></span>
+      <div class="row"><button class="btn ghost a-cancel">Cancel</button><button class="btn primary a-go"></button></div>
+    </div>`;
+  const boxes = $$("input[type=checkbox]", box);
+  const sync = () => {
+    const n = boxes.filter((b) => b.checked).length;
+    $(".a-count", box).textContent = `${n} of ${boxes.length} selected · ${boxes.length - n} will be marked Not applicable`;
+    const go = $(".a-go", box);
+    go.textContent = n ? `Apply ${n} point${n > 1 ? "s" : ""}` : "Select at least one point";
+    go.disabled = !n;
+    boxes.forEach((b) => b.closest(".point").classList.toggle("off", !b.checked));
+  };
+  boxes.forEach((b) => b.addEventListener("change", sync));
+  $(".a-all", box).onclick = () => { boxes.forEach((b) => (b.checked = true)); sync(); };
+  $(".a-none", box).onclick = () => { boxes.forEach((b) => (b.checked = false)); sync(); };
+  $(".a-cancel", box).onclick = () => attachApply(panel, { ...entry, points: points.map((p) => ({ ...p, status: "open" })) });
+  $(".a-go", box).onclick = () => runApply(panel, box, entry, boxes.filter((b) => b.checked).map((b) => b.value));
+  sync();
+}
+
+async function runApply(panel, box, entry, selected) {
+  box.innerHTML = `<div class="apply-running"><span class="spinner"></span><span class="a-status">Starting…</span></div>`;
+  try {
+    const res = await api(`/api/td/${entry.id}/apply`, { method: "POST", body: { selected } });
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+        if (!line.trim()) continue;
+        const ev = JSON.parse(line);
+        if (ev.t === "status") $(".a-status", box).textContent = ev.v;
+        else if (ev.t === "error") throw new Error(ev.v);
+        else if (ev.t === "done") {
+          panel.markdown = ev.markdown;
+          panel.entry = ev.entry;
+          panel.body.innerHTML = renderMarkdown(ev.markdown);
+          renderApplyResult(panel, box, ev.entry, ev.points);
+          toast("Document updated with tracked changes");
+        }
+      }
+    }
+  } catch (e) {
+    box.innerHTML = `<div class="error-box"></div><div class="row" style="margin-top:10px"><button class="btn ghost a-retry">Back to selection</button></div>`;
+    $(".error-box", box).textContent = e.message;
+    $(".a-retry", box).onclick = () => renderApplySelect(panel, box, entry, entry.points);
+  }
+}
+
+function renderApplyResult(panel, box, entry, points) {
+  const count = (s) => points.filter((p) => p.status === s).length;
+  box.innerHTML = `
+    <div class="apply-head">
+      <div><b>${escapeHtml(entry.reviewed_name || "Reviewed document")}</b>
+        <div class="muted small">${count("applied")} applied · ${count("not_applicable")} not applicable${count("needs_input") ? ` · ${count("needs_input")} need author input` : ""}${count("failed") ? ` · ${count("failed")} not applied` : ""}. Review the tracked changes in Word to accept or reject them.</div></div>
+      <div class="row">
+        <button class="btn tiny ghost a-change">Change selection</button>
+        <button class="btn tiny ghost a-save">Save a copy…</button>
+        <button class="btn tiny primary a-open">Open in Word</button>
+      </div>
+    </div>
+    <div class="point-list">${points.map((p) => `
+      <div class="point result-${p.status}">
+        <span class="status-pill st-${p.status}">${STATUS_LABEL[p.status] || p.status}</span>
+        <div class="point-body">
+          <div class="point-top"><span class="${sevClass(p.severity)}">${escapeHtml(p.severity || "—")}</span>
+            <span class="point-id">${escapeHtml(p.id)}</span><b>${escapeHtml(p.title)}</b></div>
+          ${p.note ? `<div class="point-change">${escapeHtml(p.note)}</div>` : ""}
+        </div>
+      </div>`).join("")}
+    </div>`;
+  $(".a-open", box).onclick = async () => { try { await api(`/api/td/${entry.id}/open`, { method: "POST" }); } catch (e) { toast(e.message, true); } };
+  $(".a-save", box).onclick = async () => {
+    try { const r = await getJSON(`/api/td/${entry.id}/save`, { method: "POST" }); if (r.ok) toast(`Saved to ${r.path}`); }
+    catch (e) { toast(e.message, true); }
+  };
+  $(".a-change", box).onclick = () => renderApplySelect(panel, box, entry, points);
+}
 
 // ---------- history ----------
 let historyItems = [];

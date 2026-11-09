@@ -28,6 +28,23 @@ def add(meta: dict, markdown: str) -> dict:
     return entry
 
 
+def update(entry_id: str, fields: dict, markdown: str | None = None) -> dict | None:
+    items = _read_index()
+    for e in items:
+        if e["id"] == entry_id:
+            e.update(fields)
+            _write_index(items)
+            if markdown is not None:
+                (_DIR / f"{entry_id}.md").write_text(markdown, encoding="utf-8")
+            return e
+    return None
+
+
+def file_path(entry_id: str, suffix: str):
+    """Path for a file stored with a history entry, e.g. suffix 'source.docx'."""
+    return _DIR / f"{entry_id}.{suffix}"
+
+
 def list_all() -> list[dict]:
     return _read_index()
 
@@ -42,4 +59,5 @@ def get(entry_id: str) -> dict | None:
 
 def delete(entry_id: str) -> None:
     _write_index([e for e in _read_index() if e["id"] != entry_id])
-    (_DIR / f"{entry_id}.md").unlink(missing_ok=True)
+    for f in _DIR.glob(f"{entry_id}.*"):
+        f.unlink(missing_ok=True)

@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ReviewKit Download</title>
+  <meta name="description" content="ReviewKit: code and technical design reviews with your own Claude account. Internal tool for Eclectus developers.">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%235b5bf0'/%3E%3Cpath d='M8.5 12l2.5 2.5 4.5-5' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <style>
+    :root {
+      --bg: #f6f7fb; --elev: #ffffff; --surface: #f1f3f9; --border: #e4e7ef;
+      --text: #171a24; --text-2: #4a5164; --muted: #7a8296;
+      --accent: #5b5bf0; --accent-hover: #4a4ae0; --accent-soft: #ececfe; --on-accent: #fff;
+      --warn-soft: #fff6e5; --warn: #9a6200;
+      --shadow: 0 1px 2px rgba(20,24,40,.04), 0 8px 28px rgba(20,24,40,.07);
+      color-scheme: light;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #0e1016; --elev: #161922; --surface: #1d212c; --border: #262b38;
+        --text: #e8eaf1; --text-2: #b4bacb; --muted: #7f879b;
+        --accent: #8080ff; --accent-hover: #9393ff; --accent-soft: #23244a; --on-accent: #0e1016;
+        --warn-soft: #33270f; --warn: #f0b13c;
+        --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 28px rgba(0,0,0,.3);
+        color-scheme: dark;
+      }
+    }
+    :root[data-theme="dark"] {
+      --bg: #0e1016; --elev: #161922; --surface: #1d212c; --border: #262b38;
+      --text: #e8eaf1; --text-2: #b4bacb; --muted: #7f879b;
+      --accent: #8080ff; --accent-hover: #9393ff; --accent-soft: #23244a; --on-accent: #0e1016;
+      --warn-soft: #33270f; --warn: #f0b13c;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 28px rgba(0,0,0,.3);
+      color-scheme: dark;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font: 15px/1.6 "Segoe UI Variable Text", "Segoe UI", Inter, system-ui, -apple-system, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+    .wrap { max-width: 960px; margin: 0 auto; padding: 0 16px; }
+    header.top { display: flex; justify-content: space-between; align-items: center; padding: 20px 0; }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; }
+    .logo { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; color: #fff;
+      background: linear-gradient(135deg, #5b5bf0, #a35bf0); box-shadow: 0 4px 12px rgba(91,91,240,.35); }
+    .brand small { display: block; font-weight: 400; font-size: 12px; color: var(--muted); line-height: 1.2; }
+    .theme { display: flex; background: var(--surface); border-radius: 10px; padding: 3px; gap: 2px; }
+    .theme button { border: 0; background: transparent; color: var(--muted); border-radius: 7px; padding: 6px 9px; cursor: pointer; display: grid; place-items: center; }
+    .theme button.on { background: var(--elev); color: var(--text); box-shadow: var(--shadow); }
+    .theme svg { width: 16px; height: 16px; }
+
+    .hero { text-align: center; padding: 48px 0 36px; }
+    .pill { display: inline-block; font-size: 12.5px; font-weight: 600; color: var(--accent); background: var(--accent-soft); padding: 4px 12px; border-radius: 999px; margin-bottom: 18px; }
+    h1 { font-size: clamp(30px, 5vw, 44px); line-height: 1.12; letter-spacing: -.02em; margin: 0 0 14px; }
+    h1 span { background: linear-gradient(90deg, #5b5bf0, #a35bf0); -webkit-background-clip: text; background-clip: text; color: transparent; }
+    .lead { color: var(--text-2); font-size: 17px; max-width: 620px; margin: 0 auto 28px; }
+    .dl { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; background: var(--accent); color: var(--on-accent);
+      font-weight: 650; font-size: 16px; padding: 14px 26px; border-radius: 12px; box-shadow: 0 8px 24px rgba(91,91,240,.35); transition: background .15s, transform .1s; }
+    .dl:hover { background: var(--accent-hover); }
+    .dl:active { transform: translateY(1px); }
+    .meta { color: var(--muted); font-size: 13px; margin-top: 12px; }
+
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 24px 0 40px; }
+    .card { background: var(--elev); border: 1px solid var(--border); border-radius: 14px; padding: 20px; box-shadow: var(--shadow); }
+    .card .ic { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); margin-bottom: 12px; }
+    .card h3 { margin: 0 0 6px; font-size: 15.5px; }
+    .card p { margin: 0; color: var(--text-2); font-size: 14px; }
+
+    h2 { font-size: 22px; letter-spacing: -.01em; margin: 0 0 16px; }
+    .steps { counter-reset: s; display: flex; flex-direction: column; gap: 12px; margin-bottom: 24px; }
+    .step { display: flex; gap: 14px; background: var(--elev); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; }
+    .step::before { counter-increment: s; content: counter(s); width: 28px; height: 28px; border-radius: 50%; flex: none;
+      display: grid; place-items: center; font-weight: 700; font-size: 13px; background: var(--accent-soft); color: var(--accent); }
+    .step b { display: block; margin-bottom: 2px; }
+    .step p { margin: 0; color: var(--text-2); font-size: 14px; }
+    .note { display: flex; gap: 10px; background: var(--warn-soft); color: var(--warn); border-radius: 12px; padding: 12px 14px; font-size: 13.5px; margin-bottom: 40px; }
+    .note b { color: inherit; }
+    code { font-family: "Cascadia Code", Consolas, monospace; font-size: 12.5px; background: var(--surface); border: 1px solid var(--border); padding: 1px 6px; border-radius: 6px; overflow-wrap: anywhere; }
+    footer { border-top: 1px solid var(--border); padding: 22px 0 40px; color: var(--muted); font-size: 12.5px; display: flex; flex-direction: column; gap: 6px; }
+
+    @media (max-width: 760px) {
+      .grid { grid-template-columns: 1fr; }
+      .hero { padding-top: 28px; }
+    }
+  </style>
+  <script>try { const t = localStorage.getItem("rk-site-theme"); if (t && t !== "system") document.documentElement.dataset.theme = t; } catch (e) {}</script>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div class="brand">
+        <div class="logo"><svg class="i" viewBox="0 0 24 24" style="width:18px;height:18px"><path d="M9 12l2 2 4-4"/><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3z"/></svg></div>
+        <div>ReviewKit<small>Eclectus Technologies</small></div>
+      </div>
+      <div class="theme" role="radiogroup" aria-label="Theme">
+        <button data-t="light" aria-label="Light"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
+        <button data-t="system" aria-label="System"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></button>
+        <button data-t="dark" aria-label="Dark"><svg class="i" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg></button>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div class="pill">Internal tool · Windows</div>
+      <h1>Reviews with <span>your own Claude</span>,<br>on your own machine.</h1>
+      <p class="lead">Run Capataz, Angular and Ionic code reviews between any two branches, and review Technical Design documents, using the team's standard review rules.</p>
+      <a class="dl" href="ReviewKit.zip" download>
+        <svg class="i" viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></svg>
+        Download for Windows
+      </a>
+      <div class="meta">Version {{VERSION}} · {{SIZE_MB}} MB · {{DATE}}</div>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 4l-3 16"/></svg></div>
+        <h3>Code review</h3>
+        <p>Pick your local clone and enter the source and target branch. Claude reviews the diff read-only, following the team's rules.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5z"/><path d="M14 3v5h5M9 15l2 2 4-4"/></svg></div>
+        <h3>Technical design review</h3>
+        <p>Upload a .docx to get prioritized review points. Tick the ones to apply, and they're added to your document as tracked changes.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0"/></svg></div>
+        <h3>Your own account</h3>
+        <p>Sign in with your own Claude account or API key. Nothing is shared between developers, and your history stays on your PC.</p>
+      </div>
+    </section>
+
+    <h2>Get started</h2>
+    <div class="steps">
+      <div class="step"><div><b>Install Git for Windows</b><p>Make sure you can already <code>git fetch</code> your GitHub repos. ReviewKit uses your existing git credentials.</p></div></div>
+      <div class="step"><div><b>Unzip and run</b><p>Extract <code>ReviewKit.zip</code> to a folder such as <code>C:\Tools\ReviewKit</code>, then open <code>ReviewKit.exe</code>.</p></div></div>
+      <div class="step"><div><b>Connect Claude</b><p>Go to <b>Settings → Sign in with Claude</b>, finish signing in in your browser, then click <b>Refresh</b> and <b>Test connection</b>.</p></div></div>
+    </div>
+    <div class="note">
+      <svg class="i" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+      <div>The app isn't code-signed, so Windows SmartScreen may say "Windows protected your PC". Click <b>More info → Run anyway</b>. To update, download again and replace the folder. Your settings and history are kept.</div>
+    </div>
+
+    <footer>
+      <div>Build {{VERSION}} · commit <code>{{COMMIT}}</code></div>
+      <div>SHA-256 of ReviewKit.zip: <code>{{SHA256}}</code></div>
+    </footer>
+  </div>
+  <script>
+    const btns = document.querySelectorAll(".theme button");
+    function setTheme(t) {
+      if (t === "system") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+      btns.forEach((b) => b.classList.toggle("on", b.dataset.t === t));
+      try { localStorage.setItem("rk-site-theme", t); } catch (e) {}
+    }
+    let saved = "system";
+    try { saved = localStorage.getItem("rk-site-theme") || "system"; } catch (e) {}
+    setTheme(saved);
+    btns.forEach((b) => b.addEventListener("click", () => setTheme(b.dataset.t)));
+  </script>
+</body>
+</html>

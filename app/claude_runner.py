@@ -161,6 +161,83 @@ async def run(review_id: str, prompt: str, *, cwd: str | None = None, code: bool
         yield {"t": "error", "v": text}
 
 
+EDIT_SYSTEM = """You are editing an Eclectus Technologies Technical Design Document to resolve specific review points that the author has accepted.
+
+Strict rules:
+1. Address ONLY the review points listed under "Accepted review points". Never change anything for any other reason: no fixing typos, rewording, reformatting, renumbering or "improving" unrelated text, even if you notice problems.
+2. Follow the document's existing template and structure. Put new content in the section where it belongs, matching how neighbouring content is written (tone, tense, numbering scheme, bullet vs. table, heading levels). Do not add new top-level sections unless a point explicitly requires one, and if it does, number it to match the document's scheme.
+3. Make the smallest edit that fully resolves each point. Prefer extending an existing paragraph, cell or table over adding new blocks. Replace text only when the existing text itself is wrong. Never delete content unless a point requires it.
+4. Only use "style" values from the "Styles used in this document" list. Omit "style" to copy the formatting of the target paragraph.
+5. Target only IDs that appear in the document outline. Every edit must name the single accepted point_id it resolves.
+6. Write the final document text itself, as the author would. No reviewer comments, notes to the author, "TBD" placeholders, or mentions of the review.
+7. If a point cannot be resolved without information only the author has (e.g. real SLA numbers, owner names), do not invent facts: put it in "skipped" with a short reason.
+
+Operations:
+- replace: replace the full text of a paragraph (P#) or table cell (T#.R#.C#) with "text" (include the unchanged parts of that paragraph).
+- insert_after: insert one or more new paragraphs ("text"; one paragraph per line) after a paragraph, table or cell. Optional "style".
+- add_row: add a table row after a row (T#.R#) or at the end of a table (T#); "cells" lists the cell texts in column order.
+- delete: delete a paragraph (P#). Only when a point requires removing it."""
+
+EDIT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "edits": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "point_id": {"type": "string"},
+                    "op": {"type": "string", "enum": ["replace", "insert_after", "add_row", "delete"]},
+                    "target": {"type": "string"},
+                    "text": {"type": "string"},
+                    "style": {"type": "string"},
+                    "cells": {"type": "array", "items": {"type": "string"}},
+                    "summary": {"type": "string", "description": "One short sentence: what this edit changes."},
+                },
+                "required": ["point_id", "op", "target", "summary"],
+            },
+        },
+        "skipped": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"point_id": {"type": "string"}, "reason": {"type": "string"}},
+                "required": ["point_id", "reason"],
+            },
+        },
+    },
+    "required": ["edits", "skipped"],
+}
+
+
+async def plan_edits(doc_name: str, outline: str, styles: list[str], points: list[dict]) -> dict:
+    """Ask Claude for tracked-change edits that resolve only the accepted points."""
+    accepted = "\n".join(
+        f"- {p['id']} [{p.get('severity', '')}] ({p.get('section', '')}) {p.get('title', '')}: {p.get('change', '')}"
+        for p in points
+    )
+    prompt = (
+        f"Document: {doc_name}\n\n"
+        f"## Styles used in this document\n{', '.join(styles) or 'Normal'}\n\n"
+        f"## Accepted review points\n{accepted}\n\n"
+        f"## Document outline (IDs in brackets)\n{outline}"
+    )
+    opts = _options(EDIT_SYSTEM, cwd=None, tools=[], allowed=[], max_turns=4)
+    opts.include_partial_messages = False
+    opts.output_format = {"type": "json_schema", "schema": EDIT_SCHEMA}
+    async for msg in query(prompt=prompt, options=opts):
+        if isinstance(msg, ResultMessage):
+            if msg.is_error:
+                raise RuntimeError("; ".join(msg.errors or []) or msg.result or msg.subtype)
+            data = msg.structured_output
+            if data is None and msg.result:
+                data = json.loads(msg.result)
+            if not isinstance(data, dict):
+                raise RuntimeError("Claude did not return an edit plan.")
+            return data
+    raise RuntimeError("No response from Claude.")
+
+
 async def test_connection() -> dict:
     opts = _options("Reply with exactly: OK", cwd=None, tools=[], allowed=[], max_turns=1)
     opts.include_partial_messages = False

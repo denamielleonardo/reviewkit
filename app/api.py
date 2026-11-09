@@ -1,6 +1,8 @@
 """HTTP API used by the ReviewKit window (served on 127.0.0.1 only)."""
 import asyncio
 import json
+import os
+import re
 import shutil
 from pathlib import Path
 
@@ -9,12 +11,15 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import claude_runner, git_ops, history, settings
+from . import claude_runner, docx_editor, git_ops, history, settings
 from .docx_reader import docx_to_text
 from .paths import STATIC_DIR
 from .skills import REVIEWS
 
-VERSION = "1.0.0"
+try:  # written by CI at build time
+    from ._build import COMMIT, VERSION
+except ImportError:
+    VERSION, COMMIT = "dev", ""
 app = FastAPI(title="ReviewKit", docs_url=None, redoc_url=None)
 
 # Set by main.py when running inside a pywebview window (for native dialogs).
@@ -128,14 +133,63 @@ async def pick_folder():
 
 # ---------- reviews ----------
 
-def _ndjson(gen, meta: dict):
+def _ndjson(gen, meta: dict, on_done=None):
+    """Stream events as NDJSON; on completion save to history (on_done may adjust first)."""
     async def stream():
         async for ev in gen:
             if ev["t"] == "done" and ev.get("markdown"):
-                ev["entry"] = history.add({**meta, "seconds": ev.get("seconds")}, ev["markdown"])
+                extra = on_done(ev) if on_done else {}
+                entry = history.add({**meta, **extra.get("meta", {}), "seconds": ev.get("seconds")}, ev["markdown"])
+                for suffix, data in extra.get("files", {}).items():
+                    history.file_path(entry["id"], suffix).write_bytes(data)
+                ev["entry"] = entry
             yield json.dumps(ev) + "\n"
 
     return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+
+def _stream_events(events):
+    async def stream():
+        async for ev in events:
+            yield json.dumps(ev) + "\n"
+
+    return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+
+POINTS_INSTRUCTION = """
+
+After the review, append exactly one block in this format. It is hidden from the reader and is used to let the author apply accepted points to the document:
+<!-- REVIEW_POINTS
+[{"id": "RP1", "severity": "Critical|High|Medium|Low", "section": "<document section it concerns>", "title": "<short title>", "change": "<the concrete change to make in the document to resolve it>"}]
+-->
+Include every finding from your review, in the same order and with the same severity. Do not mention this block in the review text."""
+
+_POINTS_RE = re.compile(r"<!--\s*REVIEW_POINTS\s*(.*?)-->", re.S)
+
+
+def extract_points(markdown: str) -> tuple[str, list[dict]]:
+    """Split the hidden REVIEW_POINTS block off the review; returns (clean markdown, points)."""
+    m = _POINTS_RE.search(markdown)
+    if not m:
+        return markdown.strip(), []
+    clean = (markdown[: m.start()] + markdown[m.end():]).strip()
+    try:
+        raw = json.loads(m.group(1).strip())
+    except json.JSONDecodeError:
+        return clean, []
+    points = []
+    for i, p in enumerate(raw if isinstance(raw, list) else [], 1):
+        if not isinstance(p, dict):
+            continue
+        points.append({
+            "id": str(p.get("id") or f"RP{i}"),
+            "severity": str(p.get("severity", "")),
+            "section": str(p.get("section", "")),
+            "title": str(p.get("title", "")),
+            "change": str(p.get("change", "")),
+            "status": "open",
+        })
+    return clean, points
 
 
 def _code_prompt(info: dict, d: dict, body: CodeReviewIn) -> str:
@@ -185,15 +239,127 @@ async def review_td(file: UploadFile = File(...), notes: str = Form("")):
     name = file.filename or "document.docx"
     if not name.lower().endswith(".docx"):
         _err(ValueError("Please upload a .docx file."))
+    data = await file.read()
     try:
-        text = await asyncio.to_thread(docx_to_text, await file.read())
+        text = await asyncio.to_thread(docx_to_text, data)
     except Exception as e:  # noqa: BLE001
         _err(ValueError(f"Could not read {name}: {e}"))
     prompt = f"Review this Technical Design Document: **{name}**\n\n<document>\n{text}\n</document>"
     if notes.strip():
         prompt += f"\n\n## Notes from the developer\n{notes.strip()}"
+    prompt += POINTS_INSTRUCTION
     meta = {"kind": "td", "review": "td", "label": REVIEWS["td"]["label"], "title": name}
-    return _ndjson(claude_runner.run("td", prompt, code=False), meta)
+
+    def on_done(ev):
+        ev["markdown"], points = extract_points(ev["markdown"])
+        return {"meta": {"points": points}, "files": {"source.docx": data}}
+
+    return _ndjson(claude_runner.run("td", prompt, code=False), meta, on_done)
+
+
+class ApplyIn(BaseModel):
+    selected: list[str]
+
+
+def _disposition_md(points: list[dict]) -> str:
+    label = {"applied": "Applied", "not_applicable": "Not applicable", "needs_input": "Needs author input",
+             "failed": "Not applied (edit failed)"}
+    rows = ["| Point | Severity | Title | Status | Notes |", "| --- | --- | --- | --- | --- |"]
+    for p in points:
+        note = (p.get("note") or "").replace("|", "/").replace("\n", " ")
+        title = p.get("title", "").replace("|", "/")
+        rows.append(f"| {p['id']} | {p.get('severity', '')} | {title} | {label.get(p.get('status'), p.get('status', ''))} | {note} |")
+    return "## Review point disposition\n\n" + "\n".join(rows)
+
+
+@app.post("/api/td/{entry_id}/apply")
+async def apply_td(entry_id: str, body: ApplyIn):
+    entry = history.get(entry_id)
+    src = history.file_path(entry_id, "source.docx")
+    if not entry or entry.get("kind") != "td" or not src.exists():
+        raise HTTPException(404, "The original document for this review is no longer available.")
+    points = entry.get("points") or []
+    by_id = {p["id"]: p for p in points}
+    selected = [i for i in body.selected if i in by_id]
+    if not selected:
+        _err(ValueError("Select at least one review point to apply."))
+
+    async def events():
+        data = src.read_bytes()
+        try:
+            yield {"t": "status", "v": f"Planning edits for {len(selected)} review point(s)…"}
+            outline = await asyncio.to_thread(docx_editor.outline, data)
+            styles = await asyncio.to_thread(docx_editor.used_styles, data)
+            plan = await claude_runner.plan_edits(entry["title"], outline, styles, [by_id[i] for i in selected])
+
+            # Hard guard: only edits tied to a point the user ticked are written.
+            allowed = set(selected)
+            edits = [e for e in plan.get("edits", []) if e.get("point_id") in allowed]
+            dropped = len(plan.get("edits", [])) - len(edits)
+            yield {"t": "status", "v": f"Writing {len(edits)} tracked change(s) into the document…"}
+            new_bytes, results = await asyncio.to_thread(docx_editor.apply_edits, data, edits)
+        except Exception as e:  # noqa: BLE001
+            yield {"t": "error", "v": str(e)}
+            return
+
+        skipped = {s.get("point_id"): s.get("reason", "") for s in plan.get("skipped", [])}
+        changes: dict[str, list[str]] = {}
+        failures: dict[str, list[str]] = {}
+        for r in results:
+            (changes if r["ok"] else failures).setdefault(r["point_id"], []).append(
+                r.get("summary", "") if r["ok"] else r.get("error", ""))
+        for p in points:
+            if p["id"] not in allowed:
+                p["status"], p["note"] = "not_applicable", "Marked not applicable by the author."
+            elif changes.get(p["id"]):
+                p["status"], p["note"] = "applied", "; ".join(c for c in changes[p["id"]] if c)
+            elif p["id"] in skipped:
+                p["status"], p["note"] = "needs_input", skipped[p["id"]]
+            else:
+                p["status"] = "failed"
+                p["note"] = "; ".join(failures.get(p["id"], [])) or "No edit was proposed for this point."
+
+        stem = entry["title"][:-5] if entry["title"].lower().endswith(".docx") else entry["title"]
+        out_name = f"{stem} (reviewed).docx"
+        history.file_path(entry_id, "reviewed.docx").write_bytes(new_bytes)
+        md = entry["markdown"].split("\n## Review point disposition")[0].rstrip()
+        md += "\n\n" + _disposition_md(points)
+        updated = history.update(entry_id, {"points": points, "reviewed_name": out_name}, md)
+        yield {"t": "done", "points": points, "entry": updated, "markdown": md,
+               "file": out_name, "dropped": dropped}
+
+    return _stream_events(events())
+
+
+@app.post("/api/td/{entry_id}/open")
+async def open_reviewed(entry_id: str):
+    p = history.file_path(entry_id, "reviewed.docx")
+    if not p.exists():
+        raise HTTPException(404, "No edited document yet.")
+    os.startfile(str(p))  # opens in Word
+    return {"ok": True}
+
+
+@app.post("/api/td/{entry_id}/save")
+async def save_reviewed(entry_id: str):
+    e = history.get(entry_id)
+    p = history.file_path(entry_id, "reviewed.docx")
+    if not e or not p.exists():
+        raise HTTPException(404, "No edited document yet.")
+    win = WINDOW["ref"]
+    if win is None:
+        raise HTTPException(501, "Save is only available in the desktop window; use Open instead.")
+    import webview
+
+    result = await asyncio.to_thread(
+        win.create_file_dialog, webview.FileDialog.SAVE,
+        save_filename=e.get("reviewed_name") or "reviewed.docx", file_types=("Word document (*.docx)",),
+    )
+    if not result:
+        return {"ok": False}
+    dest = result if isinstance(result, str) else result[0]
+    shutil.copyfile(p, dest)
+    return {"ok": True, "path": dest}
 
 
 # ---------- history ----------
