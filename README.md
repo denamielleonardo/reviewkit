@@ -6,7 +6,7 @@ Eclectus Technologies' local review tool. Each developer runs it on their own PC
 - **Technical design review**: drop in a `.docx`. Claude returns prioritized review points with severities.
 - **History**: every review is saved on your PC, where you can copy it or export it as `.md`.
 
-The review rules are the team's Claude skills, embedded in the built app, so everyone reviews against the same standards. They are internal and **not committed to this repo**. See [skills/README.md](skills/README.md) for how to add them before you run or build. Your own `~/.claude` settings, CLAUDE.md, and skills are ignored during a review.
+The review rules are the team's Claude skills in [`skills/`](skills/README.md), built into the app so everyone reviews against the same standards. Your own `~/.claude` settings, CLAUDE.md, and skills are ignored during a review.
 
 ## For developers: install and connect
 
@@ -26,8 +26,6 @@ Data stays on your PC under `%APPDATA%\ReviewKit\` (settings, API key if you set
 
 ## For maintainers
 
-First copy the review skills into `skills/` ([how](skills/README.md)). Then:
-
 ```bash
 py -3.12 -m venv .venv
 .venv\Scripts\pip install -r requirements.txt pyinstaller
@@ -39,17 +37,9 @@ py -3.12 -m venv .venv
 
 Every push to `main` runs [`.github/workflows/build-and-publish.yml`](.github/workflows/build-and-publish.yml). It builds the Windows app on GitHub Actions, smoke-tests it, zips it, and publishes it with the download page ([`site/index.html`](site/index.html)) to **https://denamielleonardo.github.io/reviewkit/**, which is the only download location. Nothing is built locally.
 
-One-time repository setup:
-1. **Settings → Pages → Build and deployment → Source: GitHub Actions.**
-2. **Settings → Secrets and variables → Actions → New repository secret** named `REVIEWKIT_SKILLS_B64`. Its value is the base64 of a zip of the skill folders:
-   ```powershell
-   Compress-Archive -Path skills\* -DestinationPath skills.zip -Force
-   [Convert]::ToBase64String([IO.File]::ReadAllBytes("skills.zip")) | Set-Clipboard
-   ```
+One-time repository setup: **Settings → Pages → Build and deployment → Source: GitHub Actions.**
 
-The skills are built into the published app. The download page is public, so anyone with the link can download the app and extract the rules.
-
-**Updating review rules:** update the `REVIEWKIT_SKILLS_B64` secret with the new skills, then re-run the workflow (Actions → Build and publish ReviewKit → Run workflow) or push to `main`. To add a new review type, add a skill folder and an entry in `app/skills.py` (`REVIEWS`), then add a button in `app/static/index.html`.
+**Updating review rules:** edit the skills in [`skills/`](skills/README.md) and push to `main`. You can also re-run the workflow manually (Actions → Build and publish ReviewKit → Run workflow). Both the repo and the download page are public. An optional `REVIEWKIT_SKILLS_B64` repository secret (base64 of a zip of the skill folders) overrides the committed skills at build time. To add a new review type, add a skill folder and an entry in `app/skills.py` (`REVIEWS`), then add a button in `app/static/index.html`.
 
 ### Layout
 

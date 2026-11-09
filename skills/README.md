@@ -1,14 +1,14 @@
-# Review skills (not in this repo)
+# Review skills
 
-The review rules are internal to Eclectus Technologies, so they are not committed here. Before running or building ReviewKit, copy these skill folders into this directory:
+These are the review rules built into ReviewKit. Each folder is one Claude skill:
 
-```
-skills/
-  capataz-api-reviewer/SKILL.md
-  capataz-api-reviewer/examples/review_example.md
-  angular-code-reviewer/SKILL.md
-  ionic-framework-code-reviewer/SKILL.md
-  technical-design-reviewer/SKILL.md
-```
+| Folder | Used for |
+| --- | --- |
+| `capataz-api-reviewer/` | Code review: Capataz API (.NET) |
+| `angular-code-reviewer/` | Code review: Angular |
+| `ionic-framework-code-reviewer/` | Code review: Ionic |
+| `technical-design-reviewer/` | Technical design (.docx) review |
 
-You'll find them in your synced Claude skills, usually `%USERPROFILE%\.claude\skills\synced\<org-id>\`, or you can ask the team lead. `build.spec` bundles this folder into the exe, so developers who use the built app don't need these files.
+**To update a rule:** edit the `SKILL.md` (or copy in the latest version from your synced Claude skills, usually `%USERPROFILE%\.claude\skills\synced\<org-id>\`) and push to `main`. CI rebuilds the app and publishes it to https://denamielleonardo.github.io/reviewkit/.
+
+To add a new review type, add a skill folder, register it in `app/skills.py` (`REVIEWS`), and add a button in `app/static/index.html`.

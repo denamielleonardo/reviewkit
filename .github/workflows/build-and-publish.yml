@@ -29,18 +29,20 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt pyinstaller
 
-      - name: Add review skills from repository secret
+      - name: Check review skills
         shell: pwsh
         env:
           SKILLS_B64: ${{ secrets.REVIEWKIT_SKILLS_B64 }}
         run: |
-          if (-not $env:SKILLS_B64) {
-            Write-Output "::error title=Missing secret::Add the REVIEWKIT_SKILLS_B64 repository secret (Settings > Secrets and variables > Actions). See skills/README.md."
-            exit 1
+          # Skills are committed in skills/. An optional REVIEWKIT_SKILLS_B64 secret overrides them.
+          if ($env:SKILLS_B64) {
+            [IO.File]::WriteAllBytes("skills.zip", [Convert]::FromBase64String($env:SKILLS_B64))
+            Expand-Archive skills.zip -DestinationPath skills -Force
+            Remove-Item skills.zip
+            Write-Output "Using skills from the REVIEWKIT_SKILLS_B64 secret."
+          } else {
+            Write-Output "Using skills committed in skills/."
           }
-          [IO.File]::WriteAllBytes("skills.zip", [Convert]::FromBase64String($env:SKILLS_B64))
-          Expand-Archive skills.zip -DestinationPath skills -Force
-          Remove-Item skills.zip
           $required = @(
             "skills/capataz-api-reviewer/SKILL.md",
             "skills/angular-code-reviewer/SKILL.md",
@@ -48,9 +50,8 @@ jobs:
             "skills/technical-design-reviewer/SKILL.md"
           )
           foreach ($f in $required) {
-            if (-not (Test-Path $f)) { Write-Output "::error::Skill file missing from secret: $f"; exit 1 }
+            if (-not (Test-Path $f)) { Write-Output "::error::Skill file missing: $f"; exit 1 }
           }
-          Write-Output "Skills restored."
 
       - name: Stamp build version
         shell: pwsh

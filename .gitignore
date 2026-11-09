@@ -6,7 +6,3 @@ __pycache__/
 *.zip
 _site/
 app/_build.py
-
-# Internal review skills are kept out of this public repo.
-skills/*
-!skills/README.md
