@@ -101,7 +101,15 @@ jobs:
           Remove-Item $log -ErrorAction SilentlyContinue
           # --self-test does what a real launch does before the window opens (clear the marks, load
           # Python.Runtime.dll and the WinForms/WebView2 bridge) without opening a window on the runner.
-          $p = Start-Process -FilePath "dist/ReviewKit/ReviewKit.exe" -ArgumentList "--self-test" -PassThru
+          # Start it with CreateProcess (UseShellExecute = false), NOT Start-Process: launching an
+          # internet-marked exe through the shell shows Windows' "Open File - Security Warning" prompt,
+          # which nobody can click on a headless runner, so Start-Process never returns.
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = (Resolve-Path "dist/ReviewKit/ReviewKit.exe").Path
+          $psi.Arguments = "--self-test"
+          $psi.UseShellExecute = $false
+          $psi.WorkingDirectory = (Resolve-Path "dist/ReviewKit").Path
+          $p = [System.Diagnostics.Process]::Start($psi)
           if (-not $p.WaitForExit(90000)) {
             taskkill /PID $p.Id /T /F 2>&1 | Out-Null
             if (Test-Path $log) { Get-Content $log | Write-Output }
