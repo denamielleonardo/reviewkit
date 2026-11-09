@@ -80,7 +80,7 @@ jobs:
           Write-Output "App started, version $($r.version), reviews: $($r.reviews.Count)"
 
       - name: Smoke test as a downloaded app (internet-marked files, desktop window)
-        shell: pwsh
+        shell: powershell   # Windows PowerShell 5.1: its Set-Content/Get-Item support -Stream
         run: |
           # Reproduce what users get: every extracted file carries the Internet zone mark.
           Get-ChildItem dist/ReviewKit -Recurse -File | ForEach-Object {
@@ -154,3 +154,5 @@ jobs:
 
       - id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          timeout: 1200000   # 20 min; GitHub's Pages backend can be slow during incidents
