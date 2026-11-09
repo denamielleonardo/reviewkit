@@ -45,7 +45,29 @@ def _serve(port: int) -> uvicorn.Server:
     return server
 
 
+def _self_test() -> int:
+    """CI check for a downloaded build, without opening a window (a GUI on a headless runner can hang).
+
+    Does what a real launch does before the window appears: clears the internet-zone marks, then
+    loads pythonnet's Python.Runtime.dll and pywebview's WinForms/WebView2 bridge. Exit code 0 = OK.
+    """
+    import traceback
+
+    _unblock_own_files()
+    try:
+        import clr  # noqa: F401  loads Python.Runtime.dll (fails if it is still zone-blocked)
+        import webview.platforms.winforms  # noqa: F401  loads WinForms + WebView2 assemblies
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+        print("SELF-TEST FAILED", flush=True)
+        return 1
+    print("SELF-TEST OK", flush=True)
+    return 0
+
+
 def main() -> None:
+    if "--self-test" in sys.argv:
+        sys.exit(_self_test())
     port = int(os.environ.get("REVIEWKIT_PORT") or 0) or _free_port()
     server = _serve(port)
     url = f"http://127.0.0.1:{port}/"

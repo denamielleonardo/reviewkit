@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import claude_runner, docx_editor, git_ops, history, settings, updater
+from . import claude_runner, detect, docx_editor, git_ops, history, settings, updater
 from .docx_reader import docx_to_text
 from .paths import STATIC_DIR
 from .skills import REVIEWS
@@ -35,7 +35,7 @@ class CodeReviewIn(BaseModel):
     repo: str
     source: str
     target: str
-    review: str
+    review: str = ""  # ignored: the review type is detected from the repository and the change
     notes: str = ""
 
 
@@ -184,6 +184,7 @@ async def open_repo(body: RepoIn):
         root = await asyncio.to_thread(git_ops.repo_root, body.path.strip().strip('"'))
         info = await asyncio.to_thread(git_ops.repo_info, root)
         info["branches"] = await asyncio.to_thread(git_ops.branches, root)
+        info["stack"] = detect.describe(await asyncio.to_thread(detect.scan, root))
     except git_ops.GitError as e:
         _err(e)
     settings.remember_repo(root)
@@ -271,7 +272,7 @@ def extract_points(markdown: str) -> tuple[str, list[dict]]:
     return clean, points
 
 
-def _code_prompt(info: dict, d: dict, body: CodeReviewIn) -> str:
+def _code_prompt(info: dict, d: dict, body: CodeReviewIn, types: list[str], groups: dict) -> str:
     parts = [
         f"Review the pull request that merges **{body.source}** into **{body.target}** "
         f"in repository `{info['name']}`" + (f" ({info['origin']})" if info["origin"] else "") + ".",
@@ -290,27 +291,60 @@ def _code_prompt(info: dict, d: dict, body: CodeReviewIn) -> str:
         )
     else:
         parts.append(f"## Full diff (`git diff {d['range']}`)\n```diff\n{d['diff']}\n```")
+    if len(types) > 1:
+        lines = ["## Files per review", "Review each group with its own rules:"]
+        for t in types:
+            files = groups.get(t, [])
+            lines.append(f"\n### {REVIEWS[t]['label']} ({len(files)} files)\n" + "\n".join(f"- `{f}`" for f in files))
+        parts.append("\n".join(lines))
     if body.notes.strip():
         parts.append(f"## Notes from the developer\n{body.notes.strip()}")
     return "\n\n".join(parts)
 
 
-@app.post("/api/review/code")
-async def review_code(body: CodeReviewIn):
-    if body.review not in REVIEWS or REVIEWS[body.review]["kind"] != "code":
-        _err(ValueError("Unknown review type."))
+@app.post("/api/review/code/rules")
+async def code_rules(body: CodeReviewIn):
+    """Which review rules a change would get (shown in the confirmation before running)."""
     try:
         root = await asyncio.to_thread(git_ops.repo_root, body.repo)
-        info = await asyncio.to_thread(git_ops.repo_info, root)
+        stacks = await asyncio.to_thread(detect.scan, root)
         d = await asyncio.to_thread(git_ops.diff, root, body.source, body.target)
     except git_ops.GitError as e:
         _err(e)
+    types, groups = detect.for_change(stacks, git_ops.changed_paths(d["files"]))
+    return {
+        "types": types, "label": detect.label(types) if types else "",
+        "files": len(git_ops.changed_paths(d["files"])),
+        "counts": {REVIEWS[t]["label"]: len(groups.get(t, [])) for t in types},
+    }
+
+
+@app.post("/api/review/code")
+async def review_code(body: CodeReviewIn):
+    try:
+        root = await asyncio.to_thread(git_ops.repo_root, body.repo)
+        info = await asyncio.to_thread(git_ops.repo_info, root)
+        stacks = await asyncio.to_thread(detect.scan, root)
+        d = await asyncio.to_thread(git_ops.diff, root, body.source, body.target)
+    except git_ops.GitError as e:
+        _err(e)
+    types, groups = detect.for_change(stacks, git_ops.changed_paths(d["files"]))
+    if not types:
+        _err(ValueError("ReviewKit couldn't find a .NET, Angular or Ionic project in this repository, "
+                        "so it doesn't know which review rules to use."))
+    label = detect.label(types)
     meta = {
-        "kind": "code", "review": body.review, "label": REVIEWS[body.review]["label"],
+        "kind": "code", "review": "+".join(types), "label": label,
         "title": f"{info['name']}: {body.source} → {body.target}",
     }
-    gen = claude_runner.run(body.review, _code_prompt(info, d, body), cwd=root, code=True)
-    return _ndjson(gen, meta)
+    gen = claude_runner.run(types, _code_prompt(info, d, body, types, groups), cwd=root, code=True)
+
+    async def with_info():
+        yield {"t": "info", "label": label, "counts": {REVIEWS[t]["label"]: len(groups.get(t, [])) for t in types}}
+        async for ev in gen:
+            yield ev
+
+    return _ndjson(with_info(), meta)
 
 
 @app.post("/api/review/td")

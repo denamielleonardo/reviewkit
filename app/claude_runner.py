@@ -126,20 +126,39 @@ def _describe_raw(block: ToolUseBlock) -> str:
     return block.name
 
 
-async def run(review_id: str, prompt: str, *, cwd: str | None = None, code: bool = True) -> AsyncIterator[dict]:
+def _system_prompt(review_ids: list[str]) -> str:
+    if len(review_ids) == 1:
+        rid = review_ids[0]
+        label = REVIEWS[rid]["label"]
+        display = (
+            f"\n\nIn ReviewKit this review type is called \"{label}\". Never show the internal skill name "
+            f"({REVIEWS[rid]['skill']}) in the review; wherever the structure below asks for a skill "
+            f"or reviewer identifier, write \"{label}\" instead."
+        )
+        return BASE_INSTRUCTIONS + display + "\n\n" + skill_prompt(rid)
+    labels = [REVIEWS[r]["label"] for r in review_ids]
+    parts = [
+        BASE_INSTRUCTIONS,
+        "This change touches more than one kind of code, so the final message contains one review per kind, "
+        f"in this order: {', '.join(labels)}. Start each with a level-1 heading \"# <kind> review\" "
+        "(e.g. \"# .NET review\"), review ONLY the files listed for that kind in the prompt using that kind's "
+        "rules below, follow that kind's required structure, and separate the reviews with a horizontal rule (---). "
+        "Never show internal skill names; wherever a structure asks for a skill or reviewer identifier, write the "
+        "kind's name instead.",
+    ]
+    for rid, label in zip(review_ids, labels):
+        parts.append(f"# Rules for the {label} review\n\n{skill_prompt(rid)}")
+    return "\n\n".join(parts)
+
+
+async def run(review_id: str | list[str], prompt: str, *, cwd: str | None = None, code: bool = True) -> AsyncIterator[dict]:
     """Yields UI events: text (live text of the current message), tool, done, error."""
-    label = REVIEWS[review_id]["label"]
-    display = (
-        f"\n\nIn ReviewKit this review type is called \"{label}\". Never show the internal skill name "
-        f"({REVIEWS[review_id]['skill']}) in the review; wherever the structure below asks for a skill "
-        f"or reviewer identifier, write \"{label}\" instead."
-    )
-    system = BASE_INSTRUCTIONS + display + "\n\n" + skill_prompt(review_id)
+    review_ids = [review_id] if isinstance(review_id, str) else list(review_id)
     opts = _options(
-        system, cwd=cwd,
+        _system_prompt(review_ids), cwd=cwd,
         tools=CODE_TOOLS if code else [],
         allowed=CODE_ALLOWED if code else [],
-        max_turns=60 if code else 3,
+        max_turns=(60 + 30 * (len(review_ids) - 1)) if code else 3,
     )
     try:
         async for msg in query(prompt=prompt, options=opts):

@@ -97,10 +97,12 @@
 
           <div class="field">
             <label>Review type</label>
-            <div class="segmented" id="reviewType">
-              <button data-review="capataz" class="active">.NET</button>
-              <button data-review="angular">Angular</button>
-              <button data-review="ionic">Ionic</button>
+            <div class="detected" id="reviewType" aria-live="polite">
+              <svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/></svg>
+              <div>
+                <b id="reviewTypeLabel">Open a repository</b>
+                <div class="muted small" id="reviewTypeDetail">Chosen automatically from the repository's projects.</div>
+              </div>
             </div>
           </div>
 
@@ -298,6 +300,19 @@
     <div class="muted small" id="ovStatus">Downloading</div>
     <div class="bar"><span id="ovBar"></span></div>
     <button class="btn ghost hidden" id="ovClose">Continue without updating</button>
+  </div>
+</div>
+
+<div class="overlay hidden" id="confirmDialog" role="dialog" aria-modal="true" aria-labelledby="cdTitle">
+  <div class="card dialog">
+    <h2 id="cdTitle">Are you sure?</h2>
+    <p class="muted" id="cdMessage"></p>
+    <dl class="dialog-details hidden" id="cdDetails"></dl>
+    <div class="dialog-actions">
+      <button class="btn ghost" id="cdCancel">Cancel</button>
+      <button class="btn secondary hidden" id="cdAlt"></button>
+      <button class="btn primary" id="cdOk">Confirm</button>
+    </div>
   </div>
 </div>
 

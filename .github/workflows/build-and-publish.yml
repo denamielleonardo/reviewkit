@@ -10,14 +10,17 @@ on:
 permissions:
   contents: read
 
+# A newer push replaces an older run that is still building, instead of queueing behind it.
+# (Only the newest build is published anyway.)
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: build-and-publish-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
     name: Build Windows app
     runs-on: windows-latest
+    timeout-minutes: 25   # a normal build takes ~4 min; never let a hang run for GitHub's 6 h default
     steps:
       - uses: actions/checkout@v4
 
@@ -27,9 +30,11 @@ jobs:
           cache: pip
 
       - name: Install dependencies
+        timeout-minutes: 8
         run: python -m pip install -r requirements.txt pyinstaller
 
       - name: Check review skills
+        timeout-minutes: 2
         shell: pwsh
         env:
           SKILLS_B64: ${{ secrets.REVIEWKIT_SKILLS_B64 }}
@@ -54,6 +59,7 @@ jobs:
           }
 
       - name: Stamp build version
+        timeout-minutes: 1
         shell: pwsh
         run: |
           $version = "1.0.${{ github.run_number }}"
@@ -63,9 +69,11 @@ jobs:
           "REVIEWKIT_COMMIT=$sha" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
       - name: Build with PyInstaller
+        timeout-minutes: 8
         run: pyinstaller build.spec --noconfirm
 
-      - name: Smoke test the build
+      - name: Smoke test the build (local API)
+        timeout-minutes: 3
         shell: pwsh
         run: |
           $env:REVIEWKIT_PORT = "8799"
@@ -73,13 +81,15 @@ jobs:
           $ok = $false
           foreach ($i in 1..60) {
             Start-Sleep -Seconds 1
-            try { $r = Invoke-RestMethod "http://127.0.0.1:8799/api/status" -TimeoutSec 2; $ok = $true; break } catch {}
+            try { $r = Invoke-RestMethod "http://127.0.0.1:8799/api/status" -TimeoutSec 5; $ok = $true; break } catch {}
           }
-          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          # Kill the whole process tree (the app plus any Claude CLI it started) so nothing outlives the step.
+          taskkill /PID $p.Id /T /F 2>&1 | Out-Null
           if (-not $ok) { Write-Output "::error::Built app did not start"; exit 1 }
           Write-Output "App started, version $($r.version), reviews: $($r.reviews.Count)"
 
-      - name: Smoke test as a downloaded app (internet-marked files, desktop window)
+      - name: Smoke test as a downloaded app (internet-marked files)
+        timeout-minutes: 3
         shell: pwsh
         run: |
           # Reproduce what users get: every extracted file carries the Internet zone mark.
@@ -89,29 +99,27 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Write-Output "::error::Could not mark files as downloaded"; exit 1 }
           $log = Join-Path $env:APPDATA "ReviewKit\reviewkit.log"
           Remove-Item $log -ErrorAction SilentlyContinue
-          $env:REVIEWKIT_PORT = "8798"
-          $p = Start-Process -FilePath "dist/ReviewKit/ReviewKit.exe" -PassThru
-          $ok = $false
-          foreach ($i in 1..60) {
-            Start-Sleep -Seconds 1
-            try { Invoke-RestMethod "http://127.0.0.1:8798/api/status" -TimeoutSec 2 | Out-Null; $ok = $true; break } catch {}
+          # --self-test does what a real launch does before the window opens (clear the marks, load
+          # Python.Runtime.dll and the WinForms/WebView2 bridge) without opening a window on the runner.
+          $p = Start-Process -FilePath "dist/ReviewKit/ReviewKit.exe" -ArgumentList "--self-test" -PassThru
+          if (-not $p.WaitForExit(90000)) {
+            taskkill /PID $p.Id /T /F 2>&1 | Out-Null
+            if (Test-Path $log) { Get-Content $log | Write-Output }
+            Write-Output "::error::Self-test did not finish within 90 s"; exit 1
           }
-          Start-Sleep -Seconds 8   # give the window time to initialise pythonnet
-          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-          if (-not $ok) { Write-Output "::error::Downloaded-style app did not start"; exit 1 }
+          if (Test-Path $log) { Get-Content $log -Tail 30 | Write-Output }
+          if ($p.ExitCode -ne 0) { Write-Output "::error::Downloaded app failed to load its desktop components (exit $($p.ExitCode))"; exit 1 }
           python -c "import os,sys; sys.exit(1 if os.path.exists('dist/ReviewKit/_internal/pythonnet/runtime/Python.Runtime.dll:Zone.Identifier') else 0)"
           if ($LASTEXITCODE -ne 0) { Write-Output "::error::App did not remove the internet mark from Python.Runtime.dll"; exit 1 }
-          if ((Test-Path $log) -and (Select-String -Path $log -Pattern "Python.Runtime" -Quiet)) {
-            Get-Content $log | Write-Output
-            Write-Output "::error::Desktop window failed to load Python.Runtime.dll"; exit 1
-          }
-          Write-Output "Downloaded-style launch OK: marks removed and the desktop window loaded."
+          Write-Output "Downloaded-style launch OK: marks removed and desktop components loaded."
 
       - name: Package and build download page
+        timeout-minutes: 6
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force _site | Out-Null
-          7z a -tzip -mx=7 _site/ReviewKit.zip ./dist/ReviewKit | Out-Null
+          # -mx=5: much faster than -mx=7 for a few % larger zip.
+          7z a -tzip -mx=5 -mmt=on _site/ReviewKit.zip ./dist/ReviewKit | Out-Null
           $zip = Get-Item _site/ReviewKit.zip
           $sizeMb = [Math]::Round($zip.Length / 1MB)
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
@@ -135,35 +143,54 @@ jobs:
           Write-Output "ReviewKit.zip: $sizeMb MB, sha256 $hash"
 
       - uses: actions/upload-artifact@v4
+        timeout-minutes: 8
         with:
           name: site
           path: _site
           include-hidden-files: true
           retention-days: 3
+          compression-level: 0   # the zip is already compressed
 
   publish:
     name: Publish to GitHub Pages
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Deploys never overlap; a newer deploy replaces one still waiting.
+    concurrency:
+      group: pages
+      cancel-in-progress: true
     permissions:
       pages: write
       id-token: write
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deployment.outputs.page_url || steps.deployment_retry.outputs.page_url }}
     steps:
       - uses: actions/download-artifact@v4
+        timeout-minutes: 5
         with:
           name: site
           path: _site
 
       - uses: actions/configure-pages@v5
+        timeout-minutes: 2
 
       - uses: actions/upload-pages-artifact@v4
+        timeout-minutes: 5
         with:
           path: _site
 
+      # GitHub's Pages backend occasionally stalls a deployment. Give it 6 min, then retry once
+      # instead of sitting for 20 min.
       - id: deployment
         uses: actions/deploy-pages@v4
+        continue-on-error: true
         with:
-          timeout: 1200000   # 20 min; GitHub's Pages backend can be slow during incidents
+          timeout: 360000
+
+      - id: deployment_retry
+        if: steps.deployment.outcome == 'failure'
+        uses: actions/deploy-pages@v4
+        with:
+          timeout: 360000

@@ -84,10 +84,13 @@
     .step { display: flex; gap: 14px; background: var(--elev); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; }
     .step::before { counter-increment: s; content: counter(s); width: 28px; height: 28px; border-radius: 50%; flex: none;
       display: grid; place-items: center; font-weight: 700; font-size: 13px; background: var(--accent-soft); color: var(--accent); }
-    .step b { display: block; margin-bottom: 2px; }
+    .step h3 { margin: 3px 0 4px; font-size: 15px; }
     .step p { margin: 0; color: var(--text-2); font-size: 14px; }
-    .note { display: flex; gap: 10px; background: var(--warn-soft); color: var(--warn); border-radius: 12px; padding: 12px 14px; font-size: 13.5px; margin-bottom: 40px; }
-    .note b { color: inherit; }
+    .step p b { color: var(--text); font-weight: 600; }
+    .step .hint { margin-top: 6px; font-size: 13px; color: var(--muted); }
+    .note { display: flex; gap: 10px; background: var(--accent-soft); color: var(--text-2); border-radius: 12px; padding: 12px 14px; font-size: 13.5px; margin-bottom: 40px; }
+    .note b { color: var(--text); }
+    .note svg { color: var(--accent); }
     code { font-family: "Cascadia Code", Consolas, monospace; font-size: 12.5px; background: var(--surface); border: 1px solid var(--border); padding: 1px 6px; border-radius: 6px; overflow-wrap: anywhere; }
     footer { border-top: 1px solid var(--border); padding: 22px 0 40px; color: var(--muted); font-size: 12.5px; display: flex; flex-direction: column; gap: 6px; }
 
@@ -147,13 +150,28 @@
 
     <h2>Get started</h2>
     <div class="steps">
-      <div class="step"><div><b>Install Git for Windows</b><p>Make sure you can already <code>git fetch</code> your GitHub repos. ReviewKit uses your existing git credentials.</p></div></div>
-      <div class="step"><div><b>Unzip and run</b><p>Extract <code>ReviewKit.zip</code> to a folder such as <code>C:\Tools\ReviewKit</code>, then open <code>ReviewKit.exe</code>.</p></div></div>
-      <div class="step"><div><b>Connect Claude</b><p>Go to <b>Settings → Sign in with Claude</b>, finish signing in in your browser, then click <b>Test connection</b>.</p></div></div>
+      <div class="step"><div>
+        <h3>Install Git for Windows</h3>
+        <p>ReviewKit uses your normal Git sign-in, so make sure <code>git fetch</code> already works in your repos.</p>
+      </div></div>
+      <div class="step"><div>
+        <h3>Unzip and open ReviewKit</h3>
+        <p>Extract <code>ReviewKit.zip</code> to a folder you own, such as <code>C:\Tools\ReviewKit</code>, and open <b>ReviewKit.exe</b>.</p>
+        <p class="hint">If Windows says “Windows protected your PC”, click <b>More info</b>, then <b>Run anyway</b>. The app isn't code-signed yet.</p>
+      </div></div>
+      <div class="step"><div>
+        <h3>Connect Claude</h3>
+        <p>Open <b>Settings</b> and click <b>Sign in with Claude</b>. Finish signing in in your browser. ReviewKit connects automatically.</p>
+        <p class="hint">Already use Claude Code on this PC? Then you're already signed in.</p>
+      </div></div>
+      <div class="step"><div>
+        <h3>Run your first review</h3>
+        <p>Open your local repository and enter the source and target branch. ReviewKit picks the review type for you: <b>.NET</b>, <b>Angular</b> or <b>Ionic</b>.</p>
+      </div></div>
     </div>
     <div class="note">
-      <svg class="i" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
-      <div>The app isn't code-signed, so Windows SmartScreen may say "Windows protected your PC". Click <b>More info → Run anyway</b>. If an older download shows "Failed to resolve Python.Runtime", download this version again. After this, ReviewKit updates itself: new versions install automatically when you start it (you can turn this off in Settings). Your settings and history are kept.</div>
+      <svg class="i" viewBox="0 0 24 24"><path d="M21 12a9 9 0 11-2.6-6.4L21 8M21 3v5h-5"/></svg>
+      <div><b>Updates are automatic.</b> New versions install when you start ReviewKit, and your settings and history are kept. You can turn this off in Settings. If you have a copy from before automatic updates, download this version once.</div>
     </div>
 
     <footer>

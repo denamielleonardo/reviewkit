@@ -2,7 +2,7 @@
 
 Eclectus Technologies' local review tool. Each developer runs it on their own PC and connects their **own Claude account**.
 
-- **Code review**: pick your local clone, choose the review type (.NET, Angular, Ionic), and enter the **source** and **target** branch. Claude reviews the diff `origin/<target>...origin/<source>`.
+- **Code review**: pick your local clone and enter the **source** and **target** branch. Claude reviews the diff `origin/<target>...origin/<source>`. The review type (.NET, Angular, Ionic) is detected automatically and can't be changed by hand. The repository's project files decide it (`.sln`/`.csproj`, `angular.json`, `ionic.config.json`/`capacitor.config.*`). In a repository with more than one (e.g. a .NET API with an Angular `ClientApp`), each changed file is reviewed with the rules for its project, and a change touching both gets one review per part. See [`app/detect.py`](app/detect.py).
 - **Technical design review**: drop in a `.docx`. Claude returns prioritized review points with severities.
 - **History**: reviews are kept on your PC for 7 days, where you can copy them or export them as `.md`. Turn on **Settings → History → Auto-archive** and choose a folder to move older reviews there (one sub-folder per month) instead of deleting them.
 - **Updates**: ReviewKit checks the download page for new builds. With **Install updates automatically** on (the default), a new version is downloaded, verified (SHA-256) and installed when the app starts; otherwise an **Update now** banner appears.

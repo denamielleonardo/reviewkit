@@ -46,6 +46,21 @@ def repo_info(repo: str) -> dict:
     return {"root": repo, "name": Path(repo).name, "origin": url}
 
 
+def ls_files(repo: str) -> list[str]:
+    """Tracked files (forward-slash paths relative to the repo root)."""
+    return [f for f in _git(repo, "ls-files", "-z").split("\0") if f]
+
+
+def changed_paths(name_status: str) -> list[str]:
+    """Paths from `git diff --name-status` output (the new path for renames/copies)."""
+    paths = []
+    for line in name_status.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 2:
+            paths.append(parts[-1].strip())
+    return paths
+
+
 def fetch(repo: str) -> None:
     _git(repo, "fetch", "--prune", "origin", timeout=300)
 
