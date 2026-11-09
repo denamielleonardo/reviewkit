@@ -8,17 +8,17 @@
   --text: #171a24;
   --text-2: #4a5164;
   --muted: #7a8296;
-  --accent: #5b5bf0;
-  --accent-hover: #4a4ae0;
-  --accent-soft: #ececfe;
-  --accent-text: #ffffff;
+  --accent: #2ac172;
+  --accent-hover: #24a862;
+  --accent-soft: #e3f8ec;
+  --accent-text: #05301a;
   --success: #12a46b;
   --warn: #d48806;
   --danger: #dc3c4b;
   --danger-soft: #fdecee;
   --code-bg: #f3f4f8;
   --shadow: 0 1px 2px rgba(20, 24, 40, .04), 0 4px 16px rgba(20, 24, 40, .05);
-  --ring: 0 0 0 3px rgba(91, 91, 240, .22);
+  --ring: 0 0 0 3px rgba(42, 193, 114, .22);
   --radius: 12px;
   color-scheme: light;
 }
@@ -34,17 +34,17 @@
     --text: #e8eaf1;
     --text-2: #b4bacb;
     --muted: #7f879b;
-    --accent: #8080ff;
-    --accent-hover: #9393ff;
-    --accent-soft: #23244a;
-    --accent-text: #0e1016;
+    --accent: #2ac172;
+    --accent-hover: #3fd286;
+    --accent-soft: #12301f;
+    --accent-text: #05301a;
     --success: #34c88a;
     --warn: #f0b13c;
     --danger: #ff6b78;
     --danger-soft: #3a1d24;
     --code-bg: #1b1f29;
     --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 6px 20px rgba(0, 0, 0, .25);
-    --ring: 0 0 0 3px rgba(128, 128, 255, .3);
+    --ring: 0 0 0 3px rgba(42, 193, 114, .3);
     color-scheme: dark;
   }
 }
@@ -59,17 +59,17 @@
   --text: #e8eaf1;
   --text-2: #b4bacb;
   --muted: #7f879b;
-  --accent: #8080ff;
-  --accent-hover: #9393ff;
-  --accent-soft: #23244a;
-  --accent-text: #0e1016;
+  --accent: #2ac172;
+  --accent-hover: #3fd286;
+  --accent-soft: #12301f;
+  --accent-text: #05301a;
   --success: #34c88a;
   --warn: #f0b13c;
   --danger: #ff6b78;
   --danger-soft: #3a1d24;
   --code-bg: #1b1f29;
   --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 6px 20px rgba(0, 0, 0, .25);
-  --ring: 0 0 0 3px rgba(128, 128, 255, .3);
+  --ring: 0 0 0 3px rgba(42, 193, 114, .3);
   color-scheme: dark;
 }
 
@@ -103,8 +103,8 @@ p { margin: 0 0 8px; }
 .logo {
   width: 34px; height: 34px; border-radius: 10px;
   display: grid; place-items: center;
-  background: linear-gradient(135deg, var(--accent), #a35bf0);
-  color: #fff; box-shadow: 0 4px 12px rgba(91, 91, 240, .35);
+  background: linear-gradient(135deg, var(--accent), #1a8f52);
+  color: #fff; box-shadow: 0 4px 12px rgba(42, 193, 114, .35);
 }
 .brand-name { font-weight: 700; font-size: 15px; letter-spacing: -.01em; }
 .brand-sub { font-size: 11.5px; color: var(--muted); }

@@ -11,7 +11,7 @@
     :root {
       --bg: #f6f7fb; --elev: #ffffff; --surface: #f1f3f9; --border: #e4e7ef;
       --text: #171a24; --text-2: #4a5164; --muted: #7a8296;
-      --accent: #5b5bf0; --accent-hover: #4a4ae0; --accent-soft: #ececfe; --on-accent: #fff;
+      --accent: #2ac172; --accent-hover: #24a862; --accent-soft: #e3f8ec; --on-accent: #05301a;
       --warn-soft: #fff6e5; --warn: #9a6200;
       --shadow: 0 1px 2px rgba(20,24,40,.04), 0 8px 28px rgba(20,24,40,.07);
       color-scheme: light;
@@ -20,7 +20,7 @@
       :root:not([data-theme="light"]) {
         --bg: #0e1016; --elev: #161922; --surface: #1d212c; --border: #262b38;
         --text: #e8eaf1; --text-2: #b4bacb; --muted: #7f879b;
-        --accent: #8080ff; --accent-hover: #9393ff; --accent-soft: #23244a; --on-accent: #0e1016;
+        --accent: #2ac172; --accent-hover: #3fd286; --accent-soft: #12301f; --on-accent: #05301a;
         --warn-soft: #33270f; --warn: #f0b13c;
         --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 28px rgba(0,0,0,.3);
         color-scheme: dark;
@@ -29,7 +29,7 @@
     :root[data-theme="dark"] {
       --bg: #0e1016; --elev: #161922; --surface: #1d212c; --border: #262b38;
       --text: #e8eaf1; --text-2: #b4bacb; --muted: #7f879b;
-      --accent: #8080ff; --accent-hover: #9393ff; --accent-soft: #23244a; --on-accent: #0e1016;
+      --accent: #2ac172; --accent-hover: #3fd286; --accent-soft: #12301f; --on-accent: #05301a;
       --warn-soft: #33270f; --warn: #f0b13c;
       --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 28px rgba(0,0,0,.3);
       color-scheme: dark;
@@ -45,7 +45,7 @@
     header.top { display: flex; justify-content: space-between; align-items: center; padding: 20px 0; }
     .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; }
     .logo { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; color: #fff;
-      background: linear-gradient(135deg, #5b5bf0, #a35bf0); box-shadow: 0 4px 12px rgba(91,91,240,.35); }
+      background: linear-gradient(135deg, #2ac172, #1a8f52); box-shadow: 0 4px 12px rgba(42,193,114,.35); }
     .brand small { display: block; font-weight: 400; font-size: 12px; color: var(--muted); line-height: 1.2; }
     .theme { display: flex; background: var(--surface); border-radius: 10px; padding: 3px; gap: 2px; }
     .theme button { border: 0; background: transparent; color: var(--muted); border-radius: 7px; padding: 6px 9px; cursor: pointer; display: grid; place-items: center; }
@@ -55,10 +55,10 @@
     .hero { text-align: center; padding: 48px 0 36px; }
     .pill { display: inline-block; font-size: 12.5px; font-weight: 600; color: var(--accent); background: var(--accent-soft); padding: 4px 12px; border-radius: 999px; margin-bottom: 18px; }
     h1 { font-size: clamp(30px, 5vw, 44px); line-height: 1.12; letter-spacing: -.02em; margin: 0 0 14px; }
-    h1 span { background: linear-gradient(90deg, #5b5bf0, #a35bf0); -webkit-background-clip: text; background-clip: text; color: transparent; }
+    h1 span { background: linear-gradient(90deg, #2ac172, #1a8f52); -webkit-background-clip: text; background-clip: text; color: transparent; }
     .lead { color: var(--text-2); font-size: 17px; max-width: 620px; margin: 0 auto 28px; }
     .dl { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; background: var(--accent); color: var(--on-accent);
-      font-weight: 650; font-size: 16px; padding: 14px 26px; border-radius: 12px; box-shadow: 0 8px 24px rgba(91,91,240,.35); transition: background .15s, transform .1s; }
+      font-weight: 650; font-size: 16px; padding: 14px 26px; border-radius: 12px; box-shadow: 0 8px 24px rgba(42,193,114,.35); transition: background .15s, transform .1s; }
     .dl:hover { background: var(--accent-hover); }
     .dl:active { transform: translateY(1px); }
     .dl.busy { pointer-events: none; opacity: .92; }
@@ -68,7 +68,7 @@
     .progress { width: min(340px, 100%); margin: 16px auto 0; display: none; }
     .progress.show { display: block; }
     .bar { height: 8px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); overflow: hidden; }
-    .bar span { display: block; height: 100%; width: 0; border-radius: 999px; background: linear-gradient(90deg, #5b5bf0, #a35bf0); transition: width .2s ease; }
+    .bar span { display: block; height: 100%; width: 0; border-radius: 999px; background: linear-gradient(90deg, #2ac172, #1a8f52); transition: width .2s ease; }
     .bar.indeterminate span { width: 35%; animation: slide 1.2s ease-in-out infinite; }
     @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
     .progress-text { font-size: 13px; color: var(--text-2); margin-top: 8px; }
@@ -116,7 +116,7 @@
     <section class="hero">
       <div class="pill">Internal tool · Windows</div>
       <h1>Reviews with <span>your own Claude</span>,<br>on your own machine.</h1>
-      <p class="lead">Run Capataz, Angular and Ionic code reviews between any two branches, and review Technical Design documents, using the team's standard review rules.</p>
+      <p class="lead">Run .NET, Angular and Ionic code reviews between any two branches, and review Technical Design documents, using the team's standard review rules.</p>
       <a class="dl" id="dl" href="ReviewKit.zip" download>
         <svg class="i" viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></svg>
         <span id="dlLabel">Download for Windows</span>

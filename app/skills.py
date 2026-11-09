@@ -5,7 +5,7 @@ from pathlib import Path
 from .paths import SKILLS_DIR
 
 REVIEWS = {
-    "capataz": {"label": "Capataz API (.NET)", "skill": "capataz-api-reviewer", "kind": "code"},
+    "capataz": {"label": ".NET", "skill": "capataz-api-reviewer", "kind": "code"},
     "angular": {"label": "Angular", "skill": "angular-code-reviewer", "kind": "code"},
     "ionic": {"label": "Ionic", "skill": "ionic-framework-code-reviewer", "kind": "code"},
     "td": {"label": "Technical Design", "skill": "technical-design-reviewer", "kind": "td"},

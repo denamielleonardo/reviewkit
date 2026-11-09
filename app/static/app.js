@@ -522,8 +522,15 @@ async function loadSettings() {
 }
 
 $("#loginBtn").onclick = async () => {
-  try { await api("/api/login", { method: "POST" }); toast("Finish signing in in the console window, then click Refresh."); }
-  catch (e) { toast(e.message, true); }
+  try {
+    await api("/api/login", { method: "POST" });
+    toast("Finish signing in in your browser. This page updates automatically.");
+    // Poll until the sign-in completes (up to 5 minutes), then refresh the UI.
+    for (let i = 0; i < 100; i++) {
+      await new Promise((r) => setTimeout(r, 3000));
+      if (await loadStatus()) { toast("Connected to Claude"); return; }
+    }
+  } catch (e) { toast(e.message, true); }
 };
 $("#logoutBtn").onclick = async () => {
   if (!confirm("Sign out of Claude on this PC?")) return;
