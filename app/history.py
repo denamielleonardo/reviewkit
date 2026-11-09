@@ -159,3 +159,14 @@ def purge(auto_archive: bool, archive_dir: str) -> dict:
                 _remove_files(i)
     last_purge.update(archived=archived, deleted=deleted, error=error)
     return dict(last_purge)
+
+
+def clear() -> int:
+    """Delete every saved review on this PC (archived copies elsewhere are not touched). Returns the count."""
+    with _LOCK:
+        items = _read_index()
+        _write_index([])
+        for f in _DIR.iterdir():
+            if f.name != _INDEX.name and f.is_file():
+                f.unlink(missing_ok=True)
+    return len(items)

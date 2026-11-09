@@ -269,7 +269,19 @@ def extract_points(markdown: str) -> tuple[str, list[dict]]:
             "change": str(p.get("change", "")),
             "status": "open",
         })
+        if p.get("file"):  # code reviews
+            points[-1]["file"] = str(p["file"])
+            points[-1]["line"] = str(p.get("line") or "")
     return clean, points
+
+
+CODE_POINTS_INSTRUCTION = """
+
+After the review, append exactly one block in this format. It is hidden from the reader and lets the developer choose review points for ReviewKit to apply to the code:
+<!-- REVIEW_POINTS
+[{"id": "CP1", "severity": "Critical|High|Medium|Low", "file": "<repo-relative path of the file to change>", "line": "<line number or range, or empty>", "title": "<short title>", "change": "<the concrete code change that resolves it>"}]
+-->
+Include every actionable finding from your review (issues, suggestions and line comments that call for a code change), most severe first. Leave out praise and points that need no code change. Do not mention this block in the review text."""
 
 
 def _code_prompt(info: dict, d: dict, body: CodeReviewIn, types: list[str], groups: dict) -> str:
@@ -299,7 +311,7 @@ def _code_prompt(info: dict, d: dict, body: CodeReviewIn, types: list[str], grou
         parts.append("\n".join(lines))
     if body.notes.strip():
         parts.append(f"## Notes from the developer\n{body.notes.strip()}")
-    return "\n\n".join(parts)
+    return "\n\n".join(parts) + CODE_POINTS_INSTRUCTION
 
 
 @app.post("/api/review/code/rules")
@@ -336,7 +348,14 @@ async def review_code(body: CodeReviewIn):
     meta = {
         "kind": "code", "review": "+".join(types), "label": label,
         "title": f"{info['name']}: {body.source} → {body.target}",
+        "repo": root, "source": body.source.strip().removeprefix("origin/"), "target": body.target.strip(),
+        "source_sha": d["source_sha"], "types": types,
     }
+
+    def on_done(ev):
+        ev["markdown"], points = extract_points(ev["markdown"])
+        return {"meta": {"points": points}}
+
     gen = claude_runner.run(types, _code_prompt(info, d, body, types, groups), cwd=root, code=True)
 
     async def with_info():
@@ -344,7 +363,7 @@ async def review_code(body: CodeReviewIn):
         async for ev in gen:
             yield ev
 
-    return _ndjson(with_info(), meta)
+    return _ndjson(with_info(), meta, on_done)
 
 
 @app.post("/api/review/td")
@@ -444,6 +463,184 @@ async def apply_td(entry_id: str, body: ApplyIn):
     return _stream_events(events())
 
 
+# ---------- apply code review points (working tree only; never commits or pushes) ----------
+
+def _sha_file(path: Path) -> str | None:
+    import hashlib
+
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _undo_state(entry: dict) -> tuple[bool, str]:
+    """Can the last apply be reverted exactly? Only if nothing changed since (HEAD and file contents)."""
+    a = entry.get("applied")
+    if not a:
+        return False, "Nothing to undo."
+    root = Path(entry["repo"])
+    try:
+        if git_ops.rev(str(root), "HEAD") != a["head"]:
+            return False, "There are new commits on this branch since ReviewKit's changes, so they can't be undone automatically."
+    except git_ops.GitError as e:
+        return False, str(e)
+    for rel, h in a.get("hashes", {}).items():
+        if _sha_file(root / rel) != h:
+            return False, f"{rel} was changed after ReviewKit edited it, so the changes can't be undone automatically."
+    return True, ""
+
+
+def _code_check(entry: dict) -> dict:
+    """Pre-flight checks before applying points to the developer's clone."""
+    root, source = entry.get("repo", ""), entry.get("source", "")
+    out = {"ok": False, "error": "", "warning": "", "repo": root, "source": source, "branch": "", "previous": False}
+    if not root or not Path(root).is_dir():
+        out["error"] = f"The repository folder {root or '(unknown)'} is not available on this PC."
+        return out
+    try:
+        branch = git_ops.current_branch(root)
+        out["branch"] = branch
+        if branch != source:
+            out["error"] = (f"Check out {source} in {Path(root).name} first. Your clone is on "
+                            f"{branch or 'a detached HEAD'}, and ReviewKit only changes files on the branch that was reviewed.")
+            return out
+        head = git_ops.rev(root, "HEAD")
+        sha = entry.get("source_sha", "")
+        if sha and not git_ops.is_ancestor(root, sha, head):
+            out["error"] = (f"Your local {source} doesn't contain the commit that was reviewed ({sha[:7]}). "
+                            "Pull the branch first, then apply.")
+            return out
+        if sha and head != sha:
+            out["warning"] = f"{source} has newer commits than the reviewed one ({sha[:7]}). Points are applied to the current code."
+        undoable, _ = _undo_state(entry)
+        out["previous"] = bool(entry.get("applied"))
+        ours = set(entry["applied"].get("files", [])) if undoable else set()
+        dirty = [f for f in git_ops.dirty_tracked(root) if f not in ours]
+        if entry.get("applied") and not undoable:
+            out["error"] = ("ReviewKit's earlier changes were edited or committed since, so it can't replace them. "
+                            "Commit or discard them first, then apply again.")
+            return out
+        if dirty:
+            out["error"] = (f"You have uncommitted changes in {len(dirty)} file(s) (e.g. {dirty[0]}). Commit or stash them "
+                            "first, so ReviewKit's changes stay separate and can be undone.")
+            return out
+    except git_ops.GitError as e:
+        out["error"] = str(e)
+        return out
+    out["ok"] = True
+    return out
+
+
+def _code_undo(entry: dict) -> None:
+    a = entry["applied"]
+    root = Path(entry["repo"])
+    git_ops.restore(str(root), a.get("files", []))
+    for rel in a.get("new_files", []):
+        (root / rel).unlink(missing_ok=True)
+
+
+@app.get("/api/code/{entry_id}/check")
+async def code_check(entry_id: str):
+    entry = history.get(entry_id)
+    if not entry or entry.get("kind") != "code":
+        raise HTTPException(404, "Review not found.")
+    return await asyncio.to_thread(_code_check, entry)
+
+
+@app.post("/api/code/{entry_id}/apply")
+async def apply_code(entry_id: str, body: ApplyIn):
+    entry = history.get(entry_id)
+    if not entry or entry.get("kind") != "code" or not entry.get("points"):
+        raise HTTPException(404, "This review has no review points to apply.")
+    points = entry["points"]
+    by_id = {p["id"]: p for p in points}
+    selected = [i for i in body.selected if i in by_id]
+    if not selected:
+        _err(ValueError("Select at least one review point to apply."))
+
+    async def events():
+        root = entry["repo"]
+        try:
+            check = await asyncio.to_thread(_code_check, entry)
+            if not check["ok"]:
+                raise RuntimeError(check["error"])
+            if entry.get("applied"):
+                yield {"t": "status", "v": "Reverting ReviewKit's previous changes…"}
+                await asyncio.to_thread(_code_undo, entry)
+            before = set(await asyncio.to_thread(git_ops.untracked, root))
+            yield {"t": "status", "v": f"Applying {len(selected)} review point(s) to {entry['source']}…"}
+            result = {"results": []}
+            types = entry.get("types") or [t for t in entry.get("review", "").split("+") if t in REVIEWS] or ["capataz"]
+            async for ev in claude_runner.apply_code_points(root, types, [by_id[i] for i in selected], entry["source"]):
+                if ev["t"] == "tool":
+                    yield {"t": "status", "v": ev["v"]}
+                elif ev["t"] == "result":
+                    result = ev["data"]
+            files = await asyncio.to_thread(git_ops.modified_tracked, root)
+            new_files = sorted(set(await asyncio.to_thread(git_ops.untracked, root)) - before)
+            diff = await asyncio.to_thread(git_ops.working_diff, root, new_files)
+            head = await asyncio.to_thread(git_ops.rev, root, "HEAD")
+        except Exception as e:  # noqa: BLE001
+            yield {"t": "error", "v": str(e)}
+            return
+
+        by_result = {r.get("point_id"): r for r in result.get("results", []) if isinstance(r, dict)}
+        for p in points:
+            r = by_result.get(p["id"])
+            if p["id"] not in selected:
+                p["status"], p["note"] = "not_applicable", "Marked not applicable by the developer."
+            elif r and r.get("status") == "applied":
+                p["status"], p["note"] = "applied", r.get("summary", "")
+            elif r:
+                p["status"], p["note"] = "needs_input", r.get("summary", "")
+            else:
+                p["status"], p["note"] = "failed", "Claude didn't report a change for this point."
+        applied = None
+        if files or new_files:
+            applied = {"head": head, "files": files, "new_files": new_files,
+                       "hashes": {f: _sha_file(Path(root) / f) for f in files + new_files}}
+            history.file_path(entry_id, "changes.diff").write_text(diff, encoding="utf-8")
+        md = entry["markdown"].split("\n## Review point disposition")[0].rstrip() + "\n\n" + _disposition_md(points)
+        updated = history.update(entry_id, {"points": points, "applied": applied}, md)
+        yield {"t": "done", "points": points, "entry": updated, "markdown": md}
+
+    return _stream_events(events())
+
+
+@app.get("/api/code/{entry_id}/changes")
+async def code_changes(entry_id: str):
+    p = history.file_path(entry_id, "changes.diff")
+    return {"diff": p.read_text(encoding="utf-8") if p.exists() else ""}
+
+
+@app.post("/api/code/{entry_id}/undo")
+async def code_undo(entry_id: str):
+    entry = history.get(entry_id)
+    if not entry or entry.get("kind") != "code":
+        raise HTTPException(404, "Review not found.")
+    ok, reason = await asyncio.to_thread(_undo_state, entry)
+    if not ok:
+        _err(ValueError(reason))
+    await asyncio.to_thread(_code_undo, entry)
+    points = entry.get("points") or []
+    for p in points:
+        p["status"] = "open"
+        p.pop("note", None)
+    md = entry["markdown"].split("\n## Review point disposition")[0].rstrip()
+    history.file_path(entry_id, "changes.diff").unlink(missing_ok=True)
+    return {"entry": history.update(entry_id, {"points": points, "applied": None}, md), "markdown": md}
+
+
+@app.post("/api/code/{entry_id}/open-folder")
+async def code_open_folder(entry_id: str):
+    entry = history.get(entry_id)
+    if not entry or not Path(entry.get("repo", "")).is_dir():
+        raise HTTPException(404, "The repository folder is not available.")
+    os.startfile(entry["repo"])
+    return {"ok": True}
+
+
 @app.post("/api/td/{entry_id}/open")
 async def open_reviewed(entry_id: str):
     p = history.file_path(entry_id, "reviewed.docx")
@@ -495,6 +692,11 @@ async def get_history(entry_id: str):
     if e.get("review") in REVIEWS:
         e["label"] = REVIEWS[e["review"]]["label"]
     return e
+
+
+@app.delete("/api/history")
+async def clear_history():
+    return {"ok": True, "deleted": await asyncio.to_thread(history.clear)}
 
 
 @app.delete("/api/history/{entry_id}")

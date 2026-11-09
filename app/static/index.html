@@ -173,7 +173,10 @@
           <h1>History</h1>
           <p class="muted" id="historyNote">Reviews are saved on this PC for 7 days.</p>
         </div>
-        <input class="search" id="historySearch" placeholder="Search reviews…">
+        <div class="row head-tools">
+          <input class="search" id="historySearch" placeholder="Search reviews…">
+          <button class="btn ghost danger" id="clearHistoryBtn" title="Delete every saved review on this PC">Clear history</button>
+        </div>
       </header>
       <div class="view-body history-layout">
         <div class="card history-list" id="historyList"></div>
@@ -242,6 +245,9 @@
             <button class="btn secondary" id="archiveSave">Save</button>
           </div>
           <div class="muted small" id="archiveHint"></div>
+          <div class="row wrap" style="margin-top:12px">
+            <button class="btn ghost danger" id="clearHistoryBtn2">Clear history…</button>
+          </div>
         </div>
 
         <div class="card">

@@ -455,7 +455,8 @@ const sevClass = (s) => "sev sev-" + ((s || "").toLowerCase().match(/critical|hi
 const escapeHtml = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 function attachApply(panel, entry) {
-  if (!entry || entry.kind !== "td" || !(entry.points || []).length) return;
+  if (!entry || !["td", "code"].includes(entry.kind) || !(entry.points || []).length) return;
+  const code = entry.kind === "code";
   let box = $(".apply", panel.node);
   if (!box) { box = document.createElement("div"); box.className = "apply"; $(".r-scroll", panel.node).appendChild(box); }
   const points = entry.points;
@@ -464,10 +465,14 @@ function attachApply(panel, entry) {
 
   box.innerHTML = `
     <div class="apply-offer">
-      <div class="apply-icon"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5z"/><path d="M14 3v5h5M9 15l2 2 4-4"/></svg></div>
+      <div class="apply-icon">${code
+        ? `<svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5"/></svg>`
+        : `<svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5z"/><path d="M14 3v5h5M9 15l2 2 4-4"/></svg>`}</div>
       <div class="apply-text">
-        <b>Want ReviewKit to apply these review points to the document?</b>
-        <span class="muted small">You choose which points to apply. Edits follow your document's template and appear as tracked changes in a copy. Your original isn't modified.</span>
+        <b>Want ReviewKit to apply these review points to ${code ? "your code" : "the document"}?</b>
+        <span class="muted small">${code
+          ? `You choose which points to apply. Claude edits the files in your local clone on <b>${escapeHtml(entry.source || "the source branch")}</b>. Nothing is committed or pushed: you review the changes and commit them yourself.`
+          : "You choose which points to apply. Edits follow your document's template and appear as tracked changes in a copy. Your original isn't modified."}</span>
       </div>
       <div class="row">
         <button class="btn ghost a-no">No thanks</button>
@@ -475,8 +480,9 @@ function attachApply(panel, entry) {
       </div>
     </div>`;
   $(".a-no", box).onclick = async () => {
-    if (!await ask({ title: "Leave the document as is?", message: "You can still apply the review points later from History.", ok: "Leave as is" })) return;
-    box.innerHTML = `<div class="apply-note muted small">OK, the document was left as is. You can apply points later from History.</div>`; };
+    const what = code ? "code" : "document";
+    if (!await ask({ title: `Leave the ${what} as is?`, message: "You can still apply the review points later from History.", ok: "Leave as is" })) return;
+    box.innerHTML = `<div class="apply-note muted small">OK, the ${what} was left as is. You can apply points later from History.</div>`; };
   $(".a-yes", box).onclick = () => renderApplySelect(panel, box, entry, points);
 }
 
@@ -485,11 +491,12 @@ function renderApplySelect(panel, box, entry, points, back) {
   back = back || { label: "Cancel", go: () => attachApply(panel, { ...entry, points: points.map((p) => ({ ...p, status: "open" })) }) };
   // Changing an earlier selection starts from what was applied last time.
   const wasTicked = (p) => p.status !== "not_applicable";
+  const code = entry.kind === "code";
   const sorted = [...points].sort((a, b) => (SEV_ORDER[(a.severity || "").toLowerCase()] ?? 9) - (SEV_ORDER[(b.severity || "").toLowerCase()] ?? 9));
   box.innerHTML = `
     <div class="apply-head">
       <div><b>Choose the review points to apply</b>
-        <div class="muted small">Untick anything that doesn't apply. Unticked points are marked <b>Not applicable</b>, and their parts of the document aren't touched.</div></div>
+        <div class="muted small">Untick anything that doesn't apply. Unticked points are marked <b>Not applicable</b>, and their parts of the ${code ? "code" : "document"} aren't touched.</div></div>
       <div class="row"><button class="btn tiny ghost a-all">Select all</button><button class="btn tiny ghost a-none">Select none</button></div>
     </div>
     <div class="point-list">${sorted.map((p) => `
@@ -498,7 +505,8 @@ function renderApplySelect(panel, box, entry, points, back) {
         <div class="point-body">
           <div class="point-top"><span class="${sevClass(p.severity)}">${escapeHtml(p.severity || "—")}</span>
             <span class="point-id">${escapeHtml(p.id)}</span><b>${escapeHtml(p.title)}</b></div>
-          ${p.section ? `<div class="muted small">Section: ${escapeHtml(p.section)}</div>` : ""}
+          ${p.file ? `<div class="muted small point-file">${escapeHtml(p.file)}${p.line ? `:${escapeHtml(p.line)}` : ""}</div>`
+            : p.section ? `<div class="muted small">Section: ${escapeHtml(p.section)}</div>` : ""}
           <div class="point-change">${escapeHtml(p.change)}</div>
         </div>
       </label>`).join("")}
@@ -523,11 +531,12 @@ function renderApplySelect(panel, box, entry, points, back) {
   $(".a-none", box).onclick = () => { boxes.forEach((b) => (b.checked = false)); sync(); };
   $(".a-cancel", box).onclick = guarded(async () => {
     const changed = boxes.map((b) => b.checked).join() !== initial;
-    if (changed && !await ask({ title: "Discard your changes?", message: "The points you ticked or unticked here are reset. Nothing is applied to the document.", ok: "Discard changes" })) return;
+    if (changed && !await ask({ title: "Discard your changes?", message: "The points you ticked or unticked here are reset. Nothing is applied.", ok: "Discard changes" })) return;
     back.go();
   });
-  $(".a-go", box).onclick = async () => {
+  $(".a-go", box).onclick = guarded(async () => {
     const selected = boxes.filter((b) => b.checked).map((b) => b.value);
+    if (code) return confirmCodeApply(panel, box, entry, selected, boxes.length - selected.length, back);
     const already = !!entry.reviewed_name;
     const yes = await ask({
       title: `Apply ${selected.length} review point${selected.length > 1 ? "s" : ""}?`,
@@ -537,14 +546,14 @@ function renderApplySelect(panel, box, entry, points, back) {
       ok: already ? "Replace and apply" : "Apply points",
     });
     if (yes) runApply(panel, box, entry, selected, back);
-  };
+  });
   sync();
 }
 
 async function runApply(panel, box, entry, selected, back) {
   box.innerHTML = `<div class="apply-running"><span class="spinner"></span><span class="a-status">Starting…</span></div>`;
   try {
-    const res = await api(`/api/td/${entry.id}/apply`, { method: "POST", body: { selected } });
+    const res = await api(`/api/${entry.kind === "code" ? "code" : "td"}/${entry.id}/apply`, { method: "POST", body: { selected } });
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
@@ -564,7 +573,7 @@ async function runApply(panel, box, entry, selected, back) {
           panel.entry = ev.entry;
           panel.body.innerHTML = renderMarkdown(ev.markdown);
           renderApplyResult(panel, box, ev.entry, ev.points);
-          toast("Document updated with tracked changes");
+          toast(entry.kind === "code" ? "Review points applied to your code (not committed)" : "Document updated with tracked changes");
         }
       }
     }
@@ -579,6 +588,7 @@ async function runApply(panel, box, entry, selected, back) {
 }
 
 function renderApplyResult(panel, box, entry, points) {
+  if (entry.kind === "code") return renderCodeResult(panel, box, entry, points);
   const count = (s) => points.filter((p) => p.status === s).length;
   box.innerHTML = `
     <div class="apply-head">
@@ -608,6 +618,86 @@ function renderApplyResult(panel, box, entry, points) {
   $(".a-change", box).onclick = () => renderApplySelect(panel, box, entry, points, {
     label: "Back to results",
     go: () => renderApplyResult(panel, box, entry, points),
+  });
+}
+
+// ---------- apply to code ----------
+async function confirmCodeApply(panel, box, entry, selected, skipped, back) {
+  let check;
+  try { check = await getJSON(`/api/code/${entry.id}/check`); }
+  catch (e) { return toast(e.message, true); }
+  if (!check.ok) {
+    return ask({ title: "Can't apply yet", message: check.error, ok: "OK" });
+  }
+  const yes = await ask({
+    title: `Apply ${selected.length} review point${selected.length > 1 ? "s" : ""} to your code?`,
+    message: (check.previous ? "ReviewKit first reverts its previous changes, then applies this selection. " : "") +
+      "Claude edits the files in your local clone. Nothing is committed or pushed. You can view the changes and undo them afterwards." +
+      (check.warning ? ` Note: ${check.warning}` : ""),
+    details: [["Repository", check.repo], ["Branch", check.branch], ["Applying", selected.join(", ")], ["Not applicable", `${skipped} point(s)`]],
+    ok: check.previous ? "Replace and apply" : "Apply to code",
+  });
+  if (yes) runApply(panel, box, entry, selected, back);
+}
+
+function renderCodeResult(panel, box, entry, points) {
+  const count = (s) => points.filter((p) => p.status === s).length;
+  const a = entry.applied;
+  const files = a ? [...a.files.map((f) => ["M", f]), ...a.new_files.map((f) => ["A", f])] : [];
+  box.innerHTML = `
+    <div class="apply-head">
+      <div><b>Changes in ${escapeHtml((entry.repo || "").split(/[\\/]/).pop())} · ${escapeHtml(entry.source || "")}</b>
+        <div class="muted small">${count("applied")} applied · ${count("not_applicable")} not applicable${count("needs_input") ? ` · ${count("needs_input")} need your input` : ""}${count("failed") ? ` · ${count("failed")} not applied` : ""}.
+          ${a ? "Nothing was committed or pushed. Review the changes, then commit them yourself." : "No files were changed."}</div></div>
+      <div class="row wrap-row">
+        <button class="btn tiny ghost a-change">Change selection</button>
+        ${a ? `<button class="btn tiny ghost a-diff">View changes</button>
+        <button class="btn tiny ghost danger a-undo">Undo changes</button>` : ""}
+        <button class="btn tiny primary a-folder">Open folder</button>
+      </div>
+    </div>
+    ${files.length ? `<div class="changed-files">${files.map(([k, f]) => `<div><span class="fk fk-${k}">${k === "A" ? "new" : "edited"}</span><code></code></div>`).join("")}</div>` : ""}
+    <pre class="diff hidden"></pre>
+    <div class="point-list">${points.map((p) => `
+      <div class="point result-${p.status}">
+        <span class="status-pill st-${p.status}">${STATUS_LABEL[p.status] || p.status}</span>
+        <div class="point-body">
+          <div class="point-top"><span class="${sevClass(p.severity)}">${escapeHtml(p.severity || "—")}</span>
+            <span class="point-id">${escapeHtml(p.id)}</span><b>${escapeHtml(p.title)}</b></div>
+          ${p.file ? `<div class="muted small point-file">${escapeHtml(p.file)}${p.line ? `:${escapeHtml(p.line)}` : ""}</div>` : ""}
+          ${p.note ? `<div class="point-change">${escapeHtml(p.note)}</div>` : ""}
+        </div>
+      </div>`).join("")}
+    </div>`;
+  $$(".changed-files code", box).forEach((c, i) => (c.textContent = files[i][1]));
+  $(".a-folder", box).onclick = async () => { try { await api(`/api/code/${entry.id}/open-folder`, { method: "POST" }); } catch (e) { toast(e.message, true); } };
+  const diffBtn = $(".a-diff", box);
+  if (diffBtn) diffBtn.onclick = guarded(async () => {
+    const pre = $(".diff", box);
+    if (!pre.classList.contains("hidden")) { pre.classList.add("hidden"); diffBtn.textContent = "View changes"; return; }
+    try { pre.textContent = (await getJSON(`/api/code/${entry.id}/changes`)).diff || "(no changes)"; }
+    catch (e) { return toast(e.message, true); }
+    pre.classList.remove("hidden");
+    diffBtn.textContent = "Hide changes";
+  });
+  const undoBtn = $(".a-undo", box);
+  if (undoBtn) undoBtn.onclick = guarded(async () => {
+    if (!await ask({
+      title: "Undo ReviewKit's changes?",
+      message: "The edited files go back to how they were before, and files ReviewKit created are deleted. Your own uncommitted work isn't touched.",
+      details: [["Files", `${files.length}`]], ok: "Undo changes", danger: true,
+    })) return;
+    try {
+      const r = await getJSON(`/api/code/${entry.id}/undo`, { method: "POST" });
+      panel.markdown = r.markdown; panel.entry = r.entry;
+      panel.body.innerHTML = renderMarkdown(r.markdown);
+      attachApply(panel, r.entry);
+      toast("Changes undone");
+    } catch (e) { toast(e.message, true); }
+  });
+  $(".a-change", box).onclick = () => renderApplySelect(panel, box, entry, points, {
+    label: "Back to results",
+    go: () => renderCodeResult(panel, box, entry, points),
   });
 }
 
@@ -653,6 +743,26 @@ async function loadHistory() {
   renderHistory();
 }
 $("#historySearch").addEventListener("input", renderHistory);
+async function clearHistory() {
+  let items = [];
+  try { items = await getJSON("/api/history"); } catch (e) {}
+  if (!items.length) return toast("History is already empty.");
+  if (!await ask({
+    title: "Clear all history?",
+    message: "Every saved review on this PC is deleted, including technical design documents stored with them. This can't be undone. Reviews already moved to your archive folder aren't touched.",
+    details: [["Reviews", String(items.length)]],
+    ok: `Delete ${items.length} review${items.length > 1 ? "s" : ""}`, danger: true,
+  })) return;
+  try {
+    const r = await getJSON("/api/history", { method: "DELETE" });
+    state.historyId = null;
+    $('[data-slot="history"]').innerHTML = "";
+    await loadHistory();
+    toast(`Deleted ${r.deleted} review${r.deleted === 1 ? "" : "s"}`);
+  } catch (e) { toast(e.message, true); }
+}
+$("#clearHistoryBtn").onclick = guarded(clearHistory);
+$("#clearHistoryBtn2").onclick = guarded(clearHistory);
 
 // ---------- settings ----------
 async function loadSettings() {

@@ -51,6 +51,61 @@ def ls_files(repo: str) -> list[str]:
     return [f for f in _git(repo, "ls-files", "-z").split("\0") if f]
 
 
+def rev(repo: str, ref: str) -> str:
+    return _git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}").strip()
+
+
+def current_branch(repo: str) -> str:
+    """Checked-out branch name, or '' when HEAD is detached."""
+    try:
+        return _git(repo, "symbolic-ref", "--quiet", "--short", "HEAD").strip()
+    except GitError:
+        return ""
+
+
+def is_ancestor(repo: str, older: str, newer: str) -> bool:
+    try:
+        _git(repo, "merge-base", "--is-ancestor", older, newer)
+        return True
+    except GitError:
+        return False
+
+
+def dirty_tracked(repo: str) -> list[str]:
+    """Tracked files with uncommitted (staged or unstaged) changes."""
+    out = _git(repo, "status", "--porcelain=v1", "-z", "--untracked-files=no")
+    return [e[3:] for e in out.split("\0") if len(e) > 3]
+
+
+def untracked(repo: str) -> list[str]:
+    return [f for f in _git(repo, "ls-files", "--others", "--exclude-standard", "-z").split("\0") if f]
+
+
+def modified_tracked(repo: str) -> list[str]:
+    return [f for f in _git(repo, "diff", "--name-only", "-z", "HEAD").split("\0") if f]
+
+
+def working_diff(repo: str, new_files: list[str]) -> str:
+    """Uncommitted changes to tracked files plus the full content of the given new files, as a diff."""
+    text = _git(repo, "diff", "HEAD")
+    for f in new_files:
+        text += _new_file_diff(repo, f)
+    return text
+
+
+def _new_file_diff(repo: str, path: str) -> str:
+    # --no-index exits 1 when files differ, so run it directly instead of through _git.
+    p = subprocess.run(["git", "-C", repo, "diff", "--no-index", "--", "/dev/null", path],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=60, creationflags=NO_WINDOW)
+    return p.stdout
+
+
+def restore(repo: str, paths: list[str]) -> None:
+    if paths:
+        _git(repo, "checkout", "HEAD", "--", *paths)
+
+
 def changed_paths(name_status: str) -> list[str]:
     """Paths from `git diff --name-status` output (the new path for renames/copies)."""
     paths = []
@@ -104,4 +159,5 @@ def diff(repo: str, source: str, target: str) -> dict:
         "stat": stat, "files": files, "commits": commits,
         "diff": "" if truncated else full,
         "truncated": truncated,
+        "source_sha": rev(repo, src),
     }

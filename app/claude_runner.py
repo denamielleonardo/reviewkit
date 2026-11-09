@@ -283,3 +283,107 @@ async def test_connection() -> dict:
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e)}
     return {"ok": False, "error": "No response from Claude."}
+
+
+# ---------- applying code review points ----------
+
+APPLY_TOOLS = ["Read", "Grep", "Glob", "Edit", "MultiEdit", "Write"]  # no Bash: cannot run git, commit or push
+
+CODE_APPLY_SYSTEM = """You are applying accepted code review points to a developer's local clone, inside ReviewKit (Eclectus Technologies).
+
+Strict rules:
+1. Change ONLY what is needed to resolve the review points listed under "Accepted review points". Do not fix, refactor, reformat, rename or "improve" anything else, even if you notice problems. No drive-by changes.
+2. Follow the code base's existing patterns, naming and formatting. Read the surrounding code (and related files) before editing so the change fits.
+3. Make the smallest change that fully resolves each point. Keep edits inside this repository. Never touch the .git folder, build output, lock files or generated files unless a point is explicitly about them.
+4. You cannot run commands, builds, tests or git. Do not commit, stage or push; the developer reviews your changes themselves.
+5. If a point cannot be resolved safely without information only the developer has, or the code it refers to no longer exists, do not guess: mark it "skipped" with a short reason.
+6. Every point listed must appear exactly once in "results"."""
+
+CODE_APPLY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "results": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "point_id": {"type": "string"},
+                    "status": {"type": "string", "enum": ["applied", "skipped"]},
+                    "summary": {"type": "string", "description": "One sentence: what was changed, or why it was skipped."},
+                    "files": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["point_id", "status", "summary"],
+            },
+        },
+    },
+    "required": ["results"],
+}
+
+
+def _write_guard(root: str):
+    """PreToolUse hook: deny any write outside the repository or inside .git."""
+    from pathlib import Path
+
+    base = Path(root).resolve()
+
+    async def guard(input_data, tool_use_id, context):
+        tool = input_data.get("tool_name", "")
+        if tool not in ("Edit", "MultiEdit", "Write", "NotebookEdit"):
+            return {}
+        raw = (input_data.get("tool_input") or {}).get("file_path") or (input_data.get("tool_input") or {}).get("notebook_path") or ""
+        reason = ""
+        try:
+            target = (base / raw).resolve() if not Path(raw).is_absolute() else Path(raw).resolve()
+            rel = target.relative_to(base)
+            if rel.parts and rel.parts[0].lower() == ".git":
+                reason = "Writing inside .git is not allowed."
+        except (ValueError, OSError):
+            reason = f"{raw} is outside the repository; only files inside {base} may be changed."
+        if not reason:
+            return {}
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                       "permissionDecisionReason": reason}}
+
+    return guard
+
+
+async def apply_code_points(root: str, review_ids: list[str], points: list[dict], branch: str) -> AsyncIterator[dict]:
+    """Edit the working tree to resolve the given points. Yields tool events, then {"t": "result", ...}."""
+    from claude_agent_sdk import HookMatcher
+
+    accepted = "\n".join(
+        f"- {p['id']} [{p.get('severity', '')}] {p.get('file', '')}"
+        f"{(':' + str(p['line'])) if p.get('line') else ''} | {p.get('title', '')}: {p.get('change', '')}"
+        for p in points
+    )
+    rules = "\n\n".join(f"# {REVIEWS[r]['label']} review rules (for context)\n\n{skill_prompt(r)}" for r in review_ids)
+    prompt = (
+        f"Branch checked out: {branch}\n\n## Accepted review points\n{accepted}\n\n"
+        "Apply these points to the files in this repository now, then report the result for each point."
+    )
+    opts = _options(CODE_APPLY_SYSTEM + "\n\n" + rules, cwd=root, tools=APPLY_TOOLS, allowed=APPLY_TOOLS,
+                    max_turns=40 + 10 * len(points))
+    opts.include_partial_messages = False
+    opts.output_format = {"type": "json_schema", "schema": CODE_APPLY_SCHEMA}
+    opts.hooks = {"PreToolUse": [HookMatcher(matcher="Edit|MultiEdit|Write|NotebookEdit", hooks=[_write_guard(root)])]}
+    async for msg in query(prompt=prompt, options=opts):
+        if isinstance(msg, AssistantMessage):
+            for block in msg.content:
+                if isinstance(block, ToolUseBlock):
+                    i = block.input or {}
+                    if block.name in ("Edit", "MultiEdit", "Write"):
+                        yield {"t": "tool", "v": _short(f"Editing {i.get('file_path', '')}", root)}
+                    else:
+                        yield {"t": "tool", "v": _describe_tool(block, root)}
+        elif isinstance(msg, ResultMessage):
+            if msg.is_error:
+                raise RuntimeError("; ".join(msg.errors or []) or msg.result or msg.subtype)
+            data = msg.structured_output
+            if data is None and msg.result:
+                try:
+                    data = json.loads(msg.result)
+                except json.JSONDecodeError:
+                    data = None
+            yield {"t": "result", "data": data if isinstance(data, dict) else {"results": []}}
+            return
+    raise RuntimeError("No response from Claude.")
