@@ -1,0 +1,10 @@
+.venv/
+build/
+dist/
+__pycache__/
+*.pyc
+*.zip
+
+# Internal review skills are kept out of this public repo.
+skills/*
+!skills/README.md
