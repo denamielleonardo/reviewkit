@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1932 1927">
+  <defs>
+    <clipPath id="r"><polygon points="1238,0 1932,0 1932,1927 1525,1927 1525,1525 1238,1238"/></clipPath>
+    <clipPath id="lo"><polygon points="1238,1238 1927,1927 1238,1927"/></clipPath>
+    <clipPath id="l"><rect width="1238" height="1927"/></clipPath>
+  </defs>
+  <circle cx="965" cy="965" r="930" fill="#f6bf0a" clip-path="url(#r)"/>
+  <circle cx="975" cy="960" r="633" fill="#ee7322" clip-path="url(#r)"/>
+  <circle cx="975" cy="960" r="633" fill="#f68b27" clip-path="url(#lo)"/>
+  <path clip-path="url(#l)" fill="#00b34c" fill-rule="evenodd" d="M35 965a930 930 0 1 0 1860 0a930 930 0 1 0-1860 0zM532 574a164 164 0 1 0 328 0a164 164 0 1 0-328 0z"/>
+</svg>

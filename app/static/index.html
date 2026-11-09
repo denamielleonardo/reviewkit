@@ -8,16 +8,15 @@
     // Apply saved theme before paint to avoid a flash.
     try { const t = localStorage.getItem("rk-theme"); if (t && t !== "system") document.documentElement.dataset.theme = t; } catch (e) {}
   </script>
+  <link rel="icon" type="image/svg+xml" href="/static/logo.svg">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <div class="shell">
   <aside class="sidebar">
     <div class="brand">
-      <div class="logo" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="18" height="18"><path d="M9 12l2 2 4-4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
-      </div>
-      <div>
+      <img class="logo" src="/static/logo.svg" alt="Eclectus Technologies">
+      <div class="brand-text">
         <div class="brand-name">ReviewKit</div>
         <div class="brand-sub">Eclectus Technologies</div>
       </div>
@@ -59,6 +58,14 @@
   </aside>
 
   <main class="main">
+    <div class="update-bar hidden" id="updateBar">
+      <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 11-2.6-6.4L21 8M21 3v5h-5"/></svg>
+      <span class="update-text" id="updateText">A new version of ReviewKit is available.</span>
+      <div class="row">
+        <button class="btn tiny ghost" id="updateLater">Later</button>
+        <button class="btn tiny primary" id="updateNow">Update now</button>
+      </div>
+    </div>
     <!-- CODE REVIEW -->
     <section class="view active" id="view-code">
       <header class="page-head">
@@ -68,12 +75,12 @@
         </div>
       </header>
 
-      <div class="grid">
+      <div class="view-body grid">
         <div class="card form-card">
           <div class="field">
             <label for="repoPath">Local repository</label>
             <div class="row">
-              <input id="repoPath" placeholder="C:\src\capataz-api" autocomplete="off" spellcheck="false">
+              <input id="repoPath" placeholder="C:\src\my-api" autocomplete="off" spellcheck="false">
               <button class="btn ghost" id="browseBtn" title="Browse for folder">Browse</button>
               <button class="btn secondary" id="openRepoBtn">Open</button>
             </div>
@@ -135,7 +142,7 @@
           <p class="muted">Upload a Technical Design Document (.docx) to get prioritized review points.</p>
         </div>
       </header>
-      <div class="grid">
+      <div class="view-body grid">
         <div class="card form-card">
           <label class="dropzone" id="dropzone" for="docxInput">
             <input type="file" id="docxInput" accept=".docx" hidden>
@@ -162,11 +169,11 @@
       <header class="page-head">
         <div>
           <h1>History</h1>
-          <p class="muted">Every review you run is saved on this PC.</p>
+          <p class="muted" id="historyNote">Reviews are saved on this PC for 7 days.</p>
         </div>
         <input class="search" id="historySearch" placeholder="Search reviews…">
       </header>
-      <div class="history-layout">
+      <div class="view-body history-layout">
         <div class="card history-list" id="historyList"></div>
         <div class="result-slot" data-slot="history"></div>
       </div>
@@ -180,7 +187,7 @@
           <p class="muted">Connect your own Claude account. Nothing here is shared with other developers.</p>
         </div>
       </header>
-      <div class="settings-grid">
+      <div class="view-body"><div class="settings-grid">
         <div class="card">
           <h2>Claude account</h2>
           <div class="status-line" id="authStatus">Checking…</div>
@@ -190,7 +197,7 @@
             <button class="btn ghost" id="refreshAuthBtn">Refresh</button>
             <button class="btn ghost danger" id="logoutBtn">Sign out</button>
           </div>
-          <p class="muted small">Sign in opens a console window and your browser. Finish signing in there, then click <b>Refresh</b>.</p>
+          <p class="muted small">Sign in opens a console window and your browser. Finish signing in there. ReviewKit picks up the new sign-in automatically.</p>
         </div>
 
         <div class="card">
@@ -223,11 +230,32 @@
           </div>
         </div>
 
+        <div class="card">
+          <h2>History</h2>
+          <p class="muted small">Reviews are kept for <b id="retentionDays">7</b> days. Older reviews are deleted, or moved to your archive folder if auto-archive is on.</p>
+          <label class="toggle"><input type="checkbox" id="autoArchive"><span>Auto-archive reviews older than 7 days</span></label>
+          <div class="row archive-row">
+            <input id="archiveDir" placeholder="e.g. D:\Reviews\ReviewKit archive" autocomplete="off" spellcheck="false">
+            <button class="btn ghost" id="archiveBrowse">Browse</button>
+            <button class="btn secondary" id="archiveSave">Save</button>
+          </div>
+          <div class="muted small" id="archiveHint"></div>
+        </div>
+
+        <div class="card">
+          <h2>Updates</h2>
+          <div class="status-line" id="updateStatus">Version <span id="curVersion">…</span></div>
+          <label class="toggle"><input type="checkbox" id="autoUpdate"><span>Install updates automatically when ReviewKit starts</span></label>
+          <div class="row wrap">
+            <button class="btn secondary" id="checkUpdateBtn">Check for updates</button>
+          </div>
+        </div>
+
         <div class="card span2">
           <h2>About</h2>
           <div class="about" id="about"></div>
         </div>
-      </div>
+      </div></div>
     </section>
   </main>
 </div>
@@ -257,9 +285,21 @@
       <summary><span class="spinner"></span><span class="activity-now">Starting…</span></summary>
       <ol class="activity-log"></ol>
     </details>
-    <div class="markdown r-body"></div>
+    <div class="r-scroll">
+      <div class="markdown r-body"></div>
+    </div>
   </div>
 </template>
+
+<div class="overlay hidden" id="updateOverlay">
+  <div class="card overlay-card">
+    <img class="logo big" src="/static/logo.svg" alt="">
+    <b id="ovTitle">Updating ReviewKit…</b>
+    <div class="muted small" id="ovStatus">Downloading</div>
+    <div class="bar"><span id="ovBar"></span></div>
+    <button class="btn ghost hidden" id="ovClose">Continue without updating</button>
+  </div>
+</div>
 
 <div class="toast" id="toast"></div>
 

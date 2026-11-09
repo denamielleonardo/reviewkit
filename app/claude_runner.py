@@ -18,7 +18,7 @@ from claude_agent_sdk.types import StreamEvent, ToolUseBlock
 
 from . import settings
 from .paths import bundled_cli
-from .skills import skill_prompt
+from .skills import REVIEWS, skill_prompt
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -67,10 +67,18 @@ def auth_status() -> dict:
     return {k: data.get(k) for k in keep if k in data}
 
 
+_LOGIN: dict = {"proc": None}
+
+
 def start_login() -> None:
     """Open a console window running the Claude sign-in flow (opens the browser)."""
     flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
-    subprocess.Popen([_cli(), "auth", "login"], creationflags=flags)
+    _LOGIN["proc"] = subprocess.Popen([_cli(), "auth", "login"], creationflags=flags)
+
+
+def login_running() -> bool:
+    p = _LOGIN["proc"]
+    return p is not None and p.poll() is None
 
 
 def logout() -> None:
@@ -120,7 +128,13 @@ def _describe_raw(block: ToolUseBlock) -> str:
 
 async def run(review_id: str, prompt: str, *, cwd: str | None = None, code: bool = True) -> AsyncIterator[dict]:
     """Yields UI events: text (live text of the current message), tool, done, error."""
-    system = BASE_INSTRUCTIONS + "\n\n" + skill_prompt(review_id)
+    label = REVIEWS[review_id]["label"]
+    display = (
+        f"\n\nIn ReviewKit this review type is called \"{label}\". Never show the internal skill name "
+        f"({REVIEWS[review_id]['skill']}) in the review; wherever the structure below asks for a skill "
+        f"or reviewer identifier, write \"{label}\" instead."
+    )
+    system = BASE_INSTRUCTIONS + display + "\n\n" + skill_prompt(review_id)
     opts = _options(
         system, cwd=cwd,
         tools=CODE_TOOLS if code else [],

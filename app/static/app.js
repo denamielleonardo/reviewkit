@@ -93,7 +93,10 @@ async function loadStatus() {
   s.innerHTML = `<span class="dot ${d.ok ? "ok" : "bad"}"></span><span>${d.title}</span><span class="muted">${d.sub || ""}</span>`;
   $("#loginBtn").classList.toggle("hidden", d.ok && state.status.auth.authMethod !== "api_key" ? true : false);
   $("#logoutBtn").classList.toggle("hidden", !(d.ok && state.status.auth.authMethod !== "api_key"));
-  if (state.status && !state.status.git) toast("Git was not found. Install Git for Windows to run code reviews.", true);
+  if (state.status && !state.status.git && !state.gitWarned) {
+    state.gitWarned = true;
+    toast("Git was not found. Install Git for Windows to run code reviews.", true);
+  }
   return d.ok;
 }
 
@@ -337,7 +340,7 @@ const escapeHtml = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&am
 function attachApply(panel, entry) {
   if (!entry || entry.kind !== "td" || !(entry.points || []).length) return;
   let box = $(".apply", panel.node);
-  if (!box) { box = document.createElement("div"); box.className = "apply"; panel.node.appendChild(box); }
+  if (!box) { box = document.createElement("div"); box.className = "apply"; $(".r-scroll", panel.node).appendChild(box); }
   const points = entry.points;
   const done = points.some((p) => p.status && p.status !== "open");
   if (done) return renderApplyResult(panel, box, entry, points);
@@ -505,10 +508,13 @@ $("#historySearch").addEventListener("input", renderHistory);
 
 // ---------- settings ----------
 async function loadSettings() {
-  loadStatus();
+  await loadStatus();
   const s = await getJSON("/api/settings");
   $("#keyHint").textContent = s.api_key_set ? `A key ending in ${s.api_key_hint} is saved.` : "No API key saved.";
   $$("#modelSel button").forEach((b) => b.classList.toggle("active", b.dataset.model === (s.model || "")));
+  renderArchive(s);
+  $("#autoUpdate").checked = s.auto_update !== false;
+  if (st) $("#curVersion").textContent = st.version;
   const st = state.status;
   if (st) {
     $("#about").innerHTML = st.reviews.map((r) => `<div class="skill"><b></b><span class="muted small"></span></div>`).join("") +
@@ -516,22 +522,38 @@ async function loadSettings() {
     $$("#about .skill").forEach((el, i) => {
       if (!st.reviews[i]) return;
       $("b", el).textContent = st.reviews[i].label;
-      $("span", el).textContent = `Embedded skill: ${st.reviews[i].skill}`;
+      $("span", el).textContent = st.reviews[i].kind === "td" ? "Embedded review rules · documents" : "Embedded review rules · code";
     });
   }
 }
 
 $("#loginBtn").onclick = async () => {
+  const btn = $("#loginBtn");
+  busy(btn, true, "Waiting for sign-in");
   try {
     await api("/api/login", { method: "POST" });
-    toast("Finish signing in in your browser. This page updates automatically.");
-    // Poll until the sign-in completes (up to 5 minutes), then refresh the UI.
-    for (let i = 0; i < 100; i++) {
-      await new Promise((r) => setTimeout(r, 3000));
-      if (await loadStatus()) { toast("Connected to Claude"); return; }
+    toast("Finish signing in in your browser. ReviewKit updates automatically.");
+    // Long-poll the server (timers are throttled while this window is in the background,
+    // but a pending request still resolves). Gives up after ~10 minutes.
+    for (let i = 0; i < 24; i++) {
+      const r = await getJSON("/api/login/wait");
+      if (r.auth && r.auth.loggedIn) { await loadStatus(); if (state.status) loadSettings(); toast("Connected to Claude"); return; }
+      if (!r.running) { const ok = await loadStatus(); if (!ok) toast("Sign-in window closed before finishing.", true); return; }
     }
   } catch (e) { toast(e.message, true); }
+  finally { busy(btn, false); }
 };
+// Coming back to the window (e.g. from the browser after signing in) refreshes the account.
+let lastFocusCheck = 0;
+function refreshOnReturn() {
+  if (document.visibilityState === "hidden" || Date.now() - lastFocusCheck < 4000) return;
+  lastFocusCheck = Date.now();
+  const known = !!state.status;
+  const wasOk = !!(known && state.status.auth && state.status.auth.loggedIn);
+  loadStatus().then((ok) => { if (ok && known && !wasOk) toast("Connected to Claude"); });
+}
+window.addEventListener("focus", refreshOnReturn);
+document.addEventListener("visibilitychange", refreshOnReturn);
 $("#logoutBtn").onclick = async () => {
   if (!confirm("Sign out of Claude on this PC?")) return;
   await api("/api/logout", { method: "POST" });
@@ -566,6 +588,130 @@ $$("#modelSel button").forEach((b) => b.addEventListener("click", async () => {
   toast(`Model: ${b.textContent}`);
 }));
 
+// ---------- history retention / archive ----------
+function renderArchive(s) {
+  $("#retentionDays").textContent = s.retention_days || 7;
+  $("#historyNote").textContent = `Reviews are saved on this PC for ${s.retention_days || 7} days` +
+    (s.auto_archive && s.archive_dir ? `, then archived to ${s.archive_dir}.` : ".");
+  $("#autoArchive").checked = !!s.auto_archive;
+  $("#archiveDir").value = s.archive_dir || "";
+  $("#archiveDir").disabled = $("#archiveBrowse").disabled = !s.auto_archive;
+  const hint = $("#archiveHint"), p = s.purge || {};
+  hint.classList.toggle("warn-text", !!p.error);
+  hint.textContent = p.error ? p.error
+    : s.auto_archive ? (s.archive_dir ? `Old reviews are moved to ${s.archive_dir}, one folder per month.` : "Choose a folder, then click Save.")
+    : "Auto-archive is off: reviews older than 7 days are deleted.";
+}
+async function saveArchive(body) {
+  try {
+    renderArchive(await getJSON("/api/settings", { method: "POST", body }));
+    toast(body.auto_archive === false ? "Auto-archive turned off" : "Archive settings saved");
+  } catch (e) {
+    toast(e.message, true);
+    try { renderArchive(await getJSON("/api/settings")); } catch (_) {}
+  }
+}
+$("#autoArchive").addEventListener("change", (e) => {
+  const on = e.target.checked;
+  $("#archiveDir").disabled = $("#archiveBrowse").disabled = !on;
+  if (!on) saveArchive({ auto_archive: false });
+  else if ($("#archiveDir").value.trim()) saveArchive({ auto_archive: true, archive_dir: $("#archiveDir").value });
+  else { $("#archiveHint").textContent = "Choose a folder, then click Save."; $("#archiveDir").focus(); }
+});
+$("#archiveSave").onclick = () => {
+  if (!$("#autoArchive").checked) return toast("Turn on auto-archive first.", true);
+  saveArchive({ auto_archive: true, archive_dir: $("#archiveDir").value });
+};
+$("#archiveBrowse").onclick = async () => {
+  try {
+    const r = await getJSON("/api/pick-folder", { method: "POST" });
+    if (r.path) { $("#archiveDir").value = r.path; saveArchive({ auto_archive: true, archive_dir: r.path }); }
+  } catch (e) { toast(e.message, true); }
+};
+
+// ---------- updates ----------
+let updateInfo = null;
+const reviewRunning = () => !!(state.running.code || state.running.td);
+
+async function checkUpdate({ boot = false, manual = false } = {}) {
+  let u;
+  try { u = await getJSON("/api/update"); } catch (e) { u = { error: e.message }; }
+  updateInfo = u;
+  const line = $("#updateStatus");
+  if (u.error) {
+    line.innerHTML = `<span class="dot bad"></span><span></span>`;
+    $("span:last-child", line).textContent = u.error;
+    if (manual) toast(u.error, true);
+    return;
+  }
+  line.innerHTML = `<span class="dot ${u.available ? "bad" : "ok"}"></span><span></span><span class="muted"></span>`;
+  $$("span", line)[1].textContent = u.available ? `Version ${u.latest} is available` : `You're up to date · ${u.current}`;
+  $$("span", line)[2].textContent = u.available ? `installed: ${u.current}` : "";
+  if (!u.available) { $("#updateBar").classList.add("hidden"); if (manual) toast("ReviewKit is up to date"); return; }
+
+  let autoUpdate = true;
+  try { autoUpdate = (await getJSON("/api/settings")).auto_update !== false; } catch (e) {}
+  if (boot && autoUpdate && u.can_install && !reviewRunning()) return installUpdate();
+  $("#updateText").textContent = `ReviewKit ${u.latest} is available (you have ${u.current}).` +
+    (u.can_install ? "" : ` ${u.reason || ""}`);
+  $("#updateNow").classList.toggle("hidden", !u.can_install);
+  $("#updateBar").classList.remove("hidden");
+}
+
+async function installUpdate() {
+  if (reviewRunning()) return toast("Wait for the running review to finish, then update.", true);
+  const ov = $("#updateOverlay"), status = $("#ovStatus"), bar = $("#ovBar");
+  $("#ovTitle").textContent = `Updating ReviewKit${updateInfo && updateInfo.latest ? ` to ${updateInfo.latest}` : ""}…`;
+  $("#ovClose").classList.add("hidden");
+  bar.style.width = "0";
+  ov.classList.remove("hidden");
+  try {
+    const res = await api("/api/update/install", { method: "POST" });
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+        if (!line.trim()) continue;
+        const ev = JSON.parse(line);
+        if (ev.t === "status") status.textContent = ev.v;
+        else if (ev.t === "progress") {
+          bar.style.width = `${ev.v}%`;
+          status.textContent = ev.total ? `Downloading · ${(ev.done / 1048576).toFixed(0)} of ${(ev.total / 1048576).toFixed(0)} MB` : "Downloading…";
+        } else if (ev.t === "error") throw new Error(ev.v);
+        else if (ev.t === "done") {
+          bar.style.width = "100%";
+          status.textContent = "Restarting ReviewKit…";
+          return;
+        }
+      }
+    }
+    throw new Error("The update stopped before it finished.");
+  } catch (e) {
+    status.textContent = e.message;
+    $("#ovTitle").textContent = "Update failed";
+    const close = $("#ovClose");
+    close.classList.remove("hidden");
+    close.onclick = () => ov.classList.add("hidden");
+  }
+}
+$("#updateNow").onclick = () => { $("#updateBar").classList.add("hidden"); installUpdate(); };
+$("#updateLater").onclick = () => $("#updateBar").classList.add("hidden");
+$("#checkUpdateBtn").onclick = async () => {
+  const btn = $("#checkUpdateBtn");
+  busy(btn, true, "Checking");
+  try { await checkUpdate({ manual: true }); } finally { busy(btn, false); }
+};
+$("#autoUpdate").addEventListener("change", async (e) => {
+  try { await getJSON("/api/settings", { method: "POST", body: { auto_update: e.target.checked } }); toast(e.target.checked ? "Automatic updates on" : "Automatic updates off"); }
+  catch (err) { toast(err.message, true); }
+});
+
 // ---------- boot ----------
 (async function boot() {
   initTheme();
@@ -573,7 +719,10 @@ $$("#modelSel button").forEach((b) => b.addEventListener("click", async () => {
   try {
     const s = await getJSON("/api/settings");
     renderRecent(s.repos);
+    renderArchive(s);
     if (s.last_repo) { $("#repoPath").value = s.last_repo; openRepo(); }
   } catch (e) {}
   if (!ok) { show("settings"); toast("Connect your Claude account to get started."); }
+  checkUpdate({ boot: true });
+  setInterval(() => checkUpdate({}), 6 * 3600 * 1000);
 })();

@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -11,7 +12,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import claude_runner, docx_editor, git_ops, history, settings
+from . import claude_runner, docx_editor, git_ops, history, settings, updater
 from .docx_reader import docx_to_text
 from .paths import STATIC_DIR
 from .skills import REVIEWS
@@ -42,6 +43,9 @@ class SettingsIn(BaseModel):
     api_key: str | None = None
     model: str | None = None
     theme: str | None = None
+    auto_update: bool | None = None
+    auto_archive: bool | None = None
+    archive_dir: str | None = None
 
 
 def _err(e: Exception, code: int = 400):
@@ -50,9 +54,15 @@ def _err(e: Exception, code: int = 400):
 
 # ---------- connection / settings ----------
 
+def _purge_history() -> dict:
+    s = settings.load()
+    return history.purge(bool(s.get("auto_archive")), s.get("archive_dir", ""))
+
+
 @app.get("/api/status")
 async def status():
     auth = await asyncio.to_thread(claude_runner.auth_status)
+    await asyncio.to_thread(_purge_history)
     return {
         "version": VERSION,
         "git": shutil.which("git") is not None,
@@ -70,6 +80,23 @@ async def login():
     return {"ok": True}
 
 
+@app.get("/api/login/wait")
+async def login_wait():
+    """Long-poll while the sign-in console is open; returns as soon as sign-in completes.
+
+    The window's timers are throttled while the user is in the browser signing in, but a
+    pending request still resolves, so the UI updates without a manual refresh.
+    """
+    auth: dict = {}
+    for i in range(50):  # about 25 seconds
+        if i % 8 == 0 or not claude_runner.login_running():
+            auth = await asyncio.to_thread(claude_runner.auth_status)
+            if auth.get("loggedIn") or not claude_runner.login_running():
+                break
+        await asyncio.sleep(0.5)
+    return {"running": claude_runner.login_running(), "auth": auth}
+
+
 @app.post("/api/logout")
 async def logout():
     await asyncio.to_thread(claude_runner.logout)
@@ -83,7 +110,8 @@ async def test():
 
 def _public_settings(s: dict) -> dict:
     key = s.get("api_key", "")
-    return {**s, "api_key": "", "api_key_set": bool(key), "api_key_hint": f"…{key[-4:]}" if key else ""}
+    return {**s, "api_key": "", "api_key_set": bool(key), "api_key_hint": f"…{key[-4:]}" if key else "",
+            "retention_days": history.RETENTION_DAYS, "purge": dict(history.last_purge)}
 
 
 @app.get("/api/settings")
@@ -94,7 +122,58 @@ async def get_settings():
 @app.post("/api/settings")
 async def set_settings(body: SettingsIn):
     values = {k: v for k, v in body.model_dump().items() if v is not None}
-    return _public_settings(settings.save(values))
+    if "archive_dir" in values:
+        values["archive_dir"] = values["archive_dir"].strip().strip('"')
+    archive_on = values.get("auto_archive", settings.load().get("auto_archive"))
+    archive_dir = values.get("archive_dir", settings.load().get("archive_dir", ""))
+    if ("auto_archive" in values or "archive_dir" in values) and archive_on:
+        if not archive_dir:
+            _err(ValueError("Choose a folder to archive old reviews into."))
+        try:
+            values["archive_dir"] = str(await asyncio.to_thread(history.check_archive_dir, archive_dir))
+        except (OSError, ValueError) as e:
+            _err(ValueError(f"Can't use that archive folder: {e}"))
+    saved = settings.save(values)
+    if "auto_archive" in values or "archive_dir" in values:
+        await asyncio.to_thread(_purge_history)
+    return _public_settings(saved)
+
+
+# ---------- updates ----------
+
+@app.get("/api/update")
+async def check_update():
+    try:
+        return await asyncio.to_thread(updater.check, VERSION)
+    except Exception as e:  # noqa: BLE001  offline, proxy, etc.
+        return {"current": VERSION, "available": False, "error": f"Couldn't check for updates: {e}"}
+
+
+def _quit_soon() -> None:
+    """Close the app so the update script can replace its files."""
+    def go():
+        win = WINDOW["ref"]
+        if win is not None:
+            try:
+                win.destroy()
+            except Exception:  # noqa: BLE001
+                pass
+        threading.Timer(3, lambda: os._exit(0)).start()
+    threading.Timer(1.5, go).start()
+
+
+@app.post("/api/update/install")
+def install_update():
+    def stream():
+        try:
+            for ev in updater.install():
+                yield json.dumps(ev) + "\n"
+                if ev["t"] == "done":
+                    _quit_soon()
+        except Exception as e:  # noqa: BLE001
+            yield json.dumps({"t": "error", "v": str(e)}) + "\n"
+
+    return StreamingResponse(stream(), media_type="application/x-ndjson")
 
 
 # ---------- repos ----------
@@ -366,7 +445,12 @@ async def save_reviewed(entry_id: str):
 
 @app.get("/api/history")
 async def list_history():
-    return history.list_all()
+    await asyncio.to_thread(_purge_history)
+    items = history.list_all()
+    for e in items:  # show current labels (e.g. ".NET") for older entries too
+        if e.get("review") in REVIEWS:
+            e["label"] = REVIEWS[e["review"]]["label"]
+    return items
 
 
 @app.get("/api/history/{entry_id}")
@@ -374,6 +458,8 @@ async def get_history(entry_id: str):
     e = history.get(entry_id)
     if not e:
         raise HTTPException(404, "Not found")
+    if e.get("review") in REVIEWS:
+        e["label"] = REVIEWS[e["review"]]["label"]
     return e
 
 

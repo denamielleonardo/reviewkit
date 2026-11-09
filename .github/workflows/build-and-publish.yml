@@ -120,6 +120,17 @@ jobs:
           $html = $html.Replace("{{VERSION}}", $env:REVIEWKIT_VERSION).Replace("{{COMMIT}}", $env:REVIEWKIT_COMMIT)
           $html = $html.Replace("{{SIZE_MB}}", "$sizeMb").Replace("{{SHA256}}", $hash).Replace("{{DATE}}", $date)
           Set-Content -Path _site/index.html -Value $html -Encoding utf8
+          Copy-Item app/static/logo.svg _site/logo.svg
+          # Read by installed copies of ReviewKit to find and verify updates (app/updater.py).
+          $manifest = [ordered]@{
+            version = $env:REVIEWKIT_VERSION
+            commit  = $env:REVIEWKIT_COMMIT
+            date    = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            file    = "ReviewKit.zip"
+            size    = $zip.Length
+            sha256  = $hash
+          }
+          [IO.File]::WriteAllText("$PWD/_site/version.json", ($manifest | ConvertTo-Json))
           New-Item -ItemType File _site/.nojekyll | Out-Null
           Write-Output "ReviewKit.zip: $sizeMb MB, sha256 $hash"
 

@@ -6,7 +6,7 @@
   <title>ReviewKit Download</title>
   <meta name="description" content="ReviewKit: code and technical design reviews with your own Claude account. Internal tool for Eclectus developers.">
   <meta name="robots" content="noindex">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%235b5bf0'/%3E%3Cpath d='M8.5 12l2.5 2.5 4.5-5' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="icon" type="image/svg+xml" href="logo.svg">
   <style>
     :root {
       --bg: #f6f7fb; --elev: #ffffff; --surface: #f1f3f9; --border: #e4e7ef;
@@ -44,8 +44,7 @@
     .wrap { max-width: 960px; margin: 0 auto; padding: 0 16px; }
     header.top { display: flex; justify-content: space-between; align-items: center; padding: 20px 0; }
     .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; }
-    .logo { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; color: #fff;
-      background: linear-gradient(135deg, #2ac172, #1a8f52); box-shadow: 0 4px 12px rgba(42,193,114,.35); }
+    .logo { width: 34px; height: 34px; display: block; flex: none; }
     .brand small { display: block; font-weight: 400; font-size: 12px; color: var(--muted); line-height: 1.2; }
     .theme { display: flex; background: var(--surface); border-radius: 10px; padding: 3px; gap: 2px; }
     .theme button { border: 0; background: transparent; color: var(--muted); border-radius: 7px; padding: 6px 9px; cursor: pointer; display: grid; place-items: center; }
@@ -103,7 +102,7 @@
   <div class="wrap">
     <header class="top">
       <div class="brand">
-        <div class="logo"><svg class="i" viewBox="0 0 24 24" style="width:18px;height:18px"><path d="M9 12l2 2 4-4"/><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3z"/></svg></div>
+        <img class="logo" src="logo.svg" alt="Eclectus Technologies">
         <div>ReviewKit<small>Eclectus Technologies</small></div>
       </div>
       <div class="theme" role="radiogroup" aria-label="Theme">
@@ -150,11 +149,11 @@
     <div class="steps">
       <div class="step"><div><b>Install Git for Windows</b><p>Make sure you can already <code>git fetch</code> your GitHub repos. ReviewKit uses your existing git credentials.</p></div></div>
       <div class="step"><div><b>Unzip and run</b><p>Extract <code>ReviewKit.zip</code> to a folder such as <code>C:\Tools\ReviewKit</code>, then open <code>ReviewKit.exe</code>.</p></div></div>
-      <div class="step"><div><b>Connect Claude</b><p>Go to <b>Settings → Sign in with Claude</b>, finish signing in in your browser, then click <b>Refresh</b> and <b>Test connection</b>.</p></div></div>
+      <div class="step"><div><b>Connect Claude</b><p>Go to <b>Settings → Sign in with Claude</b>, finish signing in in your browser, then click <b>Test connection</b>.</p></div></div>
     </div>
     <div class="note">
       <svg class="i" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
-      <div>The app isn't code-signed, so Windows SmartScreen may say "Windows protected your PC". Click <b>More info → Run anyway</b>. If an older download shows "Failed to resolve Python.Runtime", download this version again. To update, download again and replace the folder. Your settings and history are kept.</div>
+      <div>The app isn't code-signed, so Windows SmartScreen may say "Windows protected your PC". Click <b>More info → Run anyway</b>. If an older download shows "Failed to resolve Python.Runtime", download this version again. After this, ReviewKit updates itself: new versions install automatically when you start it (you can turn this off in Settings). Your settings and history are kept.</div>
     </div>
 
     <footer>

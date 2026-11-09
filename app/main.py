@@ -65,7 +65,8 @@ def main() -> None:
     try:
         import webview
 
-        window = webview.create_window("ReviewKit", url, width=1280, height=840, min_size=(960, 640))
+        width, height = _window_size(webview)
+        window = webview.create_window("ReviewKit", url, width=width, height=height, min_size=(480, 520))
         api.WINDOW["ref"] = window
         webview.start()
         server.should_exit = True
@@ -81,6 +82,15 @@ def main() -> None:
             time.sleep(1)
     except KeyboardInterrupt:
         pass
+
+
+def _window_size(webview) -> tuple[int, int]:
+    """1280x840, shrunk to fit small or scaled screens (the UI is responsive below that)."""
+    try:
+        screen = webview.screens[0]
+        return min(1280, int(screen.width * 0.9)), min(840, int(screen.height * 0.88))
+    except Exception:  # noqa: BLE001
+        return 1280, 840
 
 
 def _unblock_own_files() -> None:

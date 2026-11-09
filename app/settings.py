@@ -4,7 +4,10 @@ import json
 from .paths import data_dir
 
 _FILE = data_dir() / "settings.json"
-DEFAULTS = {"repos": [], "last_repo": "", "api_key": "", "model": "", "theme": "system"}
+DEFAULTS = {
+    "repos": [], "last_repo": "", "api_key": "", "model": "", "theme": "system",
+    "auto_update": True, "auto_archive": False, "archive_dir": "",
+}
 
 
 def load() -> dict:
