@@ -79,6 +79,34 @@ jobs:
           if (-not $ok) { Write-Output "::error::Built app did not start"; exit 1 }
           Write-Output "App started, version $($r.version), reviews: $($r.reviews.Count)"
 
+      - name: Smoke test as a downloaded app (internet-marked files, desktop window)
+        shell: pwsh
+        run: |
+          # Reproduce what users get: every extracted file carries the Internet zone mark.
+          Get-ChildItem dist/ReviewKit -Recurse -File | ForEach-Object {
+            Set-Content -Path $_.FullName -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3"
+          }
+          $log = Join-Path $env:APPDATA "ReviewKit\reviewkit.log"
+          Remove-Item $log -ErrorAction SilentlyContinue
+          $env:REVIEWKIT_PORT = "8798"
+          $p = Start-Process -FilePath "dist/ReviewKit/ReviewKit.exe" -PassThru
+          $ok = $false
+          foreach ($i in 1..60) {
+            Start-Sleep -Seconds 1
+            try { Invoke-RestMethod "http://127.0.0.1:8798/api/status" -TimeoutSec 2 | Out-Null; $ok = $true; break } catch {}
+          }
+          Start-Sleep -Seconds 8   # give the window time to initialise pythonnet
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          if (-not $ok) { Write-Output "::error::Downloaded-style app did not start"; exit 1 }
+          $dll = Get-Item dist/ReviewKit/_internal/pythonnet/runtime/Python.Runtime.dll
+          $still = $null -ne (Get-Item $dll.FullName -Stream Zone.Identifier -ErrorAction SilentlyContinue)
+          if ($still) { Write-Output "::error::App did not remove the internet mark from Python.Runtime.dll"; exit 1 }
+          if ((Test-Path $log) -and (Select-String -Path $log -Pattern "Python.Runtime" -Quiet)) {
+            Get-Content $log | Write-Output
+            Write-Output "::error::Desktop window failed to load Python.Runtime.dll"; exit 1
+          }
+          Write-Output "Downloaded-style launch OK: marks removed and the desktop window loaded."
+
       - name: Package and build download page
         shell: pwsh
         run: |

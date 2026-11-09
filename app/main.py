@@ -6,7 +6,7 @@ import threading
 import time
 import webbrowser
 
-from .paths import data_dir
+from .paths import data_dir, resource_dir
 
 
 def _ensure_std_streams() -> None:
@@ -61,17 +61,44 @@ def main() -> None:
             pass
         return
 
+    _unblock_own_files()
     try:
         import webview
-    except Exception:  # pywebview unavailable: fall back to the browser
-        webbrowser.open(url)
+
+        window = webview.create_window("ReviewKit", url, width=1280, height=840, min_size=(960, 640))
+        api.WINDOW["ref"] = window
+        webview.start()
+        server.should_exit = True
+        return
+    except Exception:  # noqa: BLE001  window could not open: use the default browser instead
+        import traceback
+
+        traceback.print_exc()  # goes to %APPDATA%\ReviewKit\reviewkit.log
+        api.WINDOW["ref"] = None
+    webbrowser.open(url)
+    try:
         while True:
             time.sleep(1)
+    except KeyboardInterrupt:
+        pass
 
-    window = webview.create_window("ReviewKit", url, width=1280, height=840, min_size=(960, 640))
-    api.WINDOW["ref"] = window
-    webview.start()
-    server.should_exit = True
+
+def _unblock_own_files() -> None:
+    """Remove the 'downloaded from the internet' mark (Zone.Identifier) from the app's own files.
+
+    Windows copies that mark onto every file extracted from a downloaded zip, and .NET then
+    refuses to load pythonnet's Python.Runtime.dll, so the desktop window cannot start.
+    """
+    if not getattr(sys, "frozen", False) or os.name != "nt":
+        return
+    roots = {os.path.dirname(sys.executable), str(resource_dir())}
+    for root in roots:
+        for dirpath, _dirs, files in os.walk(root):
+            for name in files:
+                try:
+                    os.remove(os.path.join(dirpath, name) + ":Zone.Identifier")
+                except OSError:
+                    pass  # not marked (the usual case) or not removable
 
 
 if __name__ == "__main__":
