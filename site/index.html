@@ -61,6 +61,17 @@
       font-weight: 650; font-size: 16px; padding: 14px 26px; border-radius: 12px; box-shadow: 0 8px 24px rgba(91,91,240,.35); transition: background .15s, transform .1s; }
     .dl:hover { background: var(--accent-hover); }
     .dl:active { transform: translateY(1px); }
+    .dl.busy { pointer-events: none; opacity: .92; }
+    .dl.done { background: #12a46b; box-shadow: 0 8px 24px rgba(18,164,107,.3); }
+    .spin { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid currentColor; border-right-color: transparent; animation: spin .8s linear infinite; flex: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .progress { width: min(340px, 100%); margin: 16px auto 0; display: none; }
+    .progress.show { display: block; }
+    .bar { height: 8px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); overflow: hidden; }
+    .bar span { display: block; height: 100%; width: 0; border-radius: 999px; background: linear-gradient(90deg, #5b5bf0, #a35bf0); transition: width .2s ease; }
+    .bar.indeterminate span { width: 35%; animation: slide 1.2s ease-in-out infinite; }
+    @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+    .progress-text { font-size: 13px; color: var(--text-2); margin-top: 8px; }
     .meta { color: var(--muted); font-size: 13px; margin-top: 12px; }
 
     .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 24px 0 40px; }
@@ -106,10 +117,14 @@
       <div class="pill">Internal tool · Windows</div>
       <h1>Reviews with <span>your own Claude</span>,<br>on your own machine.</h1>
       <p class="lead">Run Capataz, Angular and Ionic code reviews between any two branches, and review Technical Design documents, using the team's standard review rules.</p>
-      <a class="dl" href="ReviewKit.zip" download>
+      <a class="dl" id="dl" href="ReviewKit.zip" download>
         <svg class="i" viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></svg>
-        Download for Windows
+        <span id="dlLabel">Download for Windows</span>
       </a>
+      <div class="progress" id="progress" aria-live="polite">
+        <div class="bar" id="bar"><span id="barFill"></span></div>
+        <div class="progress-text" id="progressText">Starting download, please wait…</div>
+      </div>
       <div class="meta">Version {{VERSION}} · {{SIZE_MB}} MB · {{DATE}}</div>
     </section>
 
@@ -158,6 +173,85 @@
     try { saved = localStorage.getItem("rk-site-theme") || "system"; } catch (e) {}
     setTheme(saved);
     btns.forEach((b) => b.addEventListener("click", () => setTheme(b.dataset.t)));
+
+    // Download with a visible progress indicator; falls back to a normal download on any problem.
+    const dl = document.getElementById("dl");
+    const label = document.getElementById("dlLabel");
+    const icon = dl.querySelector("svg");
+    const progress = document.getElementById("progress");
+    const bar = document.getElementById("bar");
+    const fill = document.getElementById("barFill");
+    const text = document.getElementById("progressText");
+    const mb = (n) => (n / 1048576).toFixed(0);
+    let busy = false;
+
+    function setBusy(on) {
+      busy = on;
+      dl.classList.toggle("busy", on);
+      icon.style.display = on ? "none" : "";
+      const s = dl.querySelector(".spin");
+      if (on && !s) { const sp = document.createElement("span"); sp.className = "spin"; dl.prepend(sp); }
+      if (!on && s) s.remove();
+    }
+
+    function fallback() {
+      setBusy(false);
+      progress.classList.remove("show");
+      label.textContent = "Download for Windows";
+      const a = document.createElement("a");
+      a.href = dl.getAttribute("href"); a.download = "ReviewKit.zip";
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+
+    dl.addEventListener("click", async (e) => {
+      if (!window.fetch || !window.ReadableStream) return; // old browser: normal download
+      e.preventDefault();
+      if (busy) return;
+      setBusy(true);
+      dl.classList.remove("done");
+      label.textContent = "Downloading… please wait";
+      progress.classList.add("show");
+      fill.style.width = "0";
+      bar.classList.add("indeterminate");
+      text.textContent = "Starting download, please wait…";
+      try {
+        const res = await fetch(dl.getAttribute("href"), { cache: "no-store" });
+        if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
+        const total = +res.headers.get("Content-Length") || 0;
+        if (total) bar.classList.remove("indeterminate");
+        const reader = res.body.getReader();
+        const chunks = [];
+        let got = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          got += value.length;
+          if (total) {
+            const pct = Math.min(100, Math.floor((got / total) * 100));
+            fill.style.width = pct + "%";
+            label.textContent = `Downloading… ${pct}%`;
+            text.textContent = `${mb(got)} of ${mb(total)} MB, please keep this page open`;
+          } else {
+            text.textContent = `${mb(got)} MB downloaded, please keep this page open`;
+          }
+        }
+        const url = URL.createObjectURL(new Blob(chunks, { type: "application/zip" }));
+        const a = document.createElement("a");
+        a.href = url; a.download = "ReviewKit.zip";
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+        setBusy(false);
+        bar.classList.remove("indeterminate");
+        fill.style.width = "100%";
+        dl.classList.add("done");
+        label.textContent = "Download complete";
+        text.textContent = "Saved as ReviewKit.zip. Open it from your Downloads folder.";
+        setTimeout(() => { dl.classList.remove("done"); label.textContent = "Download again"; }, 6000);
+      } catch (err) {
+        fallback();
+      }
+    });
   </script>
 </body>
 </html>
