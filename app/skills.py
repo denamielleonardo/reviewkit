@@ -8,6 +8,9 @@ REVIEWS = {
     "capataz": {"label": ".NET", "skill": "capataz-api-reviewer", "kind": "code"},
     "angular": {"label": "Angular", "skill": "angular-code-reviewer", "kind": "code"},
     "ionic": {"label": "Ionic", "skill": "ionic-framework-code-reviewer", "kind": "code"},
+    "react": {"label": "React", "skill": "react-code-reviewer", "kind": "code"},
+    "reactnative": {"label": "React Native", "skill": "react-native-code-reviewer", "kind": "code"},
+    "python": {"label": "Python", "skill": "python-code-reviewer", "kind": "code"},
     "td": {"label": "Technical Design", "skill": "technical-design-reviewer", "kind": "td"},
 }
 

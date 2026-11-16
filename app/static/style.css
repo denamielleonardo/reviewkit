@@ -501,6 +501,12 @@ label.point:hover { border-color: var(--border-strong); }
 }
 .detected svg { width: 16px; height: 16px; color: var(--muted); margin-top: 2px; }
 .detected b { display: block; }
+.detected > div { min-width: 0; }
+.versions { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.versions dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; margin: 0; font-size: 12.5px; }
+.versions dt { color: var(--text-2); font-weight: 600; }
+.versions dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+.versions-note { margin-top: 4px; }
 .detected.bad { background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
 .detected.bad b, .detected.bad svg { color: var(--danger); }
 

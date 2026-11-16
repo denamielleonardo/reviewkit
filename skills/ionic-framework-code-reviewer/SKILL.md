@@ -12,7 +12,11 @@ Determine the framework binding and native layer used in the codebase:
 - **Native Bridge**: Capacitor (`@capacitor/core`, `@capacitor/*`) or Cordova (`@awesome-cordova-plugins/*`, `cordova-plugin-*`).
 - **State & Routing**: Angular Router / IonRouterOutlet, React Router / IonReactRouter, Vue Router / IonVueRouter.
 
-State the detected stack (e.g., *Ionic Angular with Capacitor*) in one line at the beginning of your review.
+- **Versions**: Read `package.json` for the Ionic major version (`@ionic/angular` / `@ionic/react` / `@ionic/vue`, or legacy `ionic-angular` v3), the Capacitor or Cordova version, and the underlying framework version (Angular / React / Vue).
+
+State the detected stack with versions (e.g., *Ionic 7 Angular 16 with Capacitor 5*) in one line at the beginning of your review.
+
+**Version rules (strict):** These rules apply to every Ionic version. Being on an older version is not a finding — never flag code merely because a newer version offers a nicer API. Every recommendation and snippet must work on the detected Ionic, Capacitor/Cordova and framework versions. Examples: `<ion-virtual-scroll>` exists only up to Ionic 6 (from v7 use the framework's own virtual scrolling, e.g. Angular CDK); inline `isOpen`/`trigger` modals and popovers need Ionic 6+; the modern form-control label syntax (`label` / `labelPlacement` on `ion-input`, `ion-select`, etc.) needs Ionic 7+, while older versions wrap controls in `ion-item` + `ion-label`; Capacitor plugin packages and method names differ between Capacitor 2 (`Plugins` from `@capacitor/core`) and 3+ (one `@capacitor/*` package per plugin); Ionic 3 uses `NavController` push/pop with `ionViewDidLoad`, not the Angular Router. Use newer APIs only where the code base already uses them. Do flag APIs deprecated or removed in the detected version. Do not recommend upgrading Ionic or Capacitor as a fix. If a version cannot be determined, say so and keep snippets to the syntax the existing code already demonstrates.
 
 ## Step 2: Key Ionic Review Checklist
 

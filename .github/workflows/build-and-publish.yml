@@ -52,6 +52,9 @@ jobs:
             "skills/capataz-api-reviewer/SKILL.md",
             "skills/angular-code-reviewer/SKILL.md",
             "skills/ionic-framework-code-reviewer/SKILL.md",
+            "skills/react-code-reviewer/SKILL.md",
+            "skills/react-native-code-reviewer/SKILL.md",
+            "skills/python-code-reviewer/SKILL.md",
             "skills/technical-design-reviewer/SKILL.md"
           )
           foreach ($f in $required) {

@@ -51,6 +51,36 @@ def ls_files(repo: str) -> list[str]:
     return [f for f in _git(repo, "ls-files", "-z").split("\0") if f]
 
 
+def read_file(repo: str, path: str, max_bytes: int = 2_000_000) -> str:
+    """Text of a file in the working tree ('' when missing, unreadable or too large)."""
+    try:
+        p = Path(repo) / path
+        if p.stat().st_size > max_bytes:
+            return ""
+        return p.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return ""
+
+
+def ls_tree(repo: str, ref: str) -> list[tuple[str, str]]:
+    """(blob id, path) for every file in a commit."""
+    out = []
+    for entry in _git(repo, "ls-tree", "-r", "-z", ref).split("\0"):
+        meta, _, path = entry.partition("\t")
+        parts = meta.split()
+        if path and len(parts) == 3 and parts[1] == "blob":
+            out.append((parts[2], path))
+    return out
+
+
+def cat_blob(repo: str, blob: str) -> str:
+    """Text of a blob by id ('' when it can't be read)."""
+    try:
+        return _git(repo, "cat-file", "-p", blob).lstrip("﻿")
+    except GitError:
+        return ""
+
+
 def rev(repo: str, ref: str) -> str:
     return _git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}").strip()
 

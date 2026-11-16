@@ -2,7 +2,7 @@
 
 Eclectus Technologies' local review tool. Each developer runs it on their own PC and connects their **own Claude account**.
 
-- **Code review**: pick your local clone and enter the **source** and **target** branch. Claude reviews the diff `origin/<target>...origin/<source>`. The review type (.NET, Angular, Ionic) is detected automatically and can't be changed by hand. The repository's project files decide it (`.sln`/`.csproj`, `angular.json`, `ionic.config.json`/`capacitor.config.*`). In a repository with more than one (e.g. a .NET API with an Angular `ClientApp`), each changed file is reviewed with the rules for its project, and a change touching both gets one review per part. See [`app/detect.py`](app/detect.py).
+- **Code review**: pick your local clone and enter the **source** and **target** branch. Claude reviews the diff `origin/<target>...origin/<source>`. The review type (.NET, Python, Angular, Ionic, React, React Native) is detected automatically and can't be changed by hand. The repository's project files decide it (`.sln`/`.csproj`; `pyproject.toml`/`requirements*.txt`/`setup.py`; `angular.json`; `ionic.config.json`/`capacitor.config.*`; a `package.json` that depends on `react`, or on `react-native`/`expo`). The rules don't assume a framework version: each review first reads the project's own version (target framework, `package.json`, `requires-python`) and only suggests code that works on it. In a repository with more than one (e.g. a .NET API with an Angular `ClientApp`, or a Django API with a React front end), each changed file is reviewed with the rules for its project, and a change touching both gets one review per part. See [`app/detect.py`](app/detect.py).
 - **Technical design review**: drop in a `.docx`. Claude returns prioritized review points with severities.
 - **History**: reviews are kept on your PC for 7 days, where you can copy them or export them as `.md`. Turn on **Settings → History → Auto-archive** and choose a folder to move older reviews there (one sub-folder per month) instead of deleting them. **Clear history** (History page or Settings) deletes every saved review after a confirmation; archived copies aren't touched.
 - **Apply code review points**: after a code review, tick the points you want and ReviewKit edits your local clone to resolve them. It only runs when the clone is on the reviewed source branch, contains the reviewed commit, and has no uncommitted changes. Claude gets file tools only (no shell), and a guard blocks writes outside the repository or into `.git`, so **nothing is ever committed or pushed**. You can view the diff, undo the changes (only while you haven't edited those files since), or change the selection.
@@ -43,7 +43,7 @@ The workflow also publishes `version.json` (version, size, SHA-256). Installed c
 
 One-time repository setup: **Settings → Pages → Build and deployment → Source: GitHub Actions.**
 
-**Updating review rules:** edit the skills in [`skills/`](skills/README.md) and push to `main`. You can also re-run the workflow manually (Actions → Build and publish ReviewKit → Run workflow). Both the repo and the download page are public. An optional `REVIEWKIT_SKILLS_B64` repository secret (base64 of a zip of the skill folders) overrides the committed skills at build time. To add a new review type, add a skill folder and an entry in `app/skills.py` (`REVIEWS`), then add a button in `app/static/index.html`.
+**Updating review rules:** edit the skills in [`skills/`](skills/README.md) and push to `main`. You can also re-run the workflow manually (Actions → Build and publish ReviewKit → Run workflow). Both the repo and the download page are public. An optional `REVIEWKIT_SKILLS_B64` repository secret (base64 of a zip of the skill folders) overrides the committed skills at build time. To add a new review type, add a skill folder and an entry in `app/skills.py` (`REVIEWS`), teach `app/detect.py` how to recognise that kind of project, and add the skill to the required list in the workflow.
 
 ### Layout
 
@@ -53,6 +53,8 @@ One-time repository setup: **Settings → Pages → Build and deployment → Sou
 | `app/api.py` | Endpoints for status/login, repos, reviews (streamed NDJSON), history |
 | `app/claude_runner.py` | Runs Claude through `claude-agent-sdk` with the selected skill as system prompt |
 | `app/git_ops.py` | fetch, branch list, diff |
+| `app/detect.py` | Picks the review type(s) from the repository's project files |
+| `app/versions.py` | Reads framework/library versions from the project files once, remembers them in `%APPDATA%\ReviewKit\versions.json`, and puts them in the review prompt |
 | `app/history.py` | Saved reviews, 7-day retention, auto-archive |
 | `app/updater.py` | Update check and in-place install |
 | `app/docx_reader.py` | `.docx` → Markdown text (headings, lists, tables) |

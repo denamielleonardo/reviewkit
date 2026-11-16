@@ -237,8 +237,26 @@ function renderStack(stack) {
   $("#reviewTypeLabel").textContent = !stack ? "Open a repository" : ok ? stack.label : "No supported project found";
   $("#reviewTypeDetail").textContent = !stack ? "Chosen automatically from the repository's projects."
     : ok ? stack.detail
-    : "ReviewKit reviews .NET, Angular and Ionic projects, but found no .sln/.csproj, angular.json or ionic.config.json in this repository.";
+    : "ReviewKit reviews .NET, Python, Angular, Ionic, React and React Native projects, but found no project file for any of them (.sln/.csproj, pyproject.toml/requirements.txt, angular.json, ionic.config.json, or a package.json that uses React) in this repository.";
   $("#runCodeBtn").disabled = !!stack && !ok;
+  renderVersions(ok ? stack : null);
+}
+
+// Framework versions under the review type (read from the checked-out branch's project files).
+function renderVersions(stack) {
+  const box = $("#reviewTypeVersions");
+  const rows = (stack && stack.versions) || [];
+  box.classList.toggle("hidden", !rows.length);
+  const dl = $("dl", box);
+  dl.innerHTML = "";
+  rows.forEach((r) => {
+    const dt = document.createElement("dt"), dd = document.createElement("dd");
+    dt.textContent = r.label;
+    dd.textContent = r.text;
+    dl.append(dt, dd);
+  });
+  $(".versions-note", box).textContent = rows.length
+    ? `Versions on ${stack.versions_branch}. Each review uses the versions on its source branch.` : "";
 }
 
 // ---------- result panel ----------

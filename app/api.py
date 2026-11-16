@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import claude_runner, detect, docx_editor, git_ops, history, settings, updater
+from . import claude_runner, detect, docx_editor, git_ops, history, settings, updater, versions
 from .docx_reader import docx_to_text
 from .paths import STATIC_DIR
 from .skills import REVIEWS
@@ -184,11 +184,24 @@ async def open_repo(body: RepoIn):
         root = await asyncio.to_thread(git_ops.repo_root, body.path.strip().strip('"'))
         info = await asyncio.to_thread(git_ops.repo_info, root)
         info["branches"] = await asyncio.to_thread(git_ops.branches, root)
-        info["stack"] = detect.describe(await asyncio.to_thread(detect.scan, root))
+        stacks = await asyncio.to_thread(detect.scan, root)
+        info["stack"] = detect.describe(stacks)
     except git_ops.GitError as e:
         _err(e)
+    info["stack"].update(await asyncio.to_thread(_stack_versions, root, stacks))
     settings.remember_repo(root)
     return info
+
+
+def _stack_versions(root: str, stacks: dict) -> dict:
+    """Versions shown under the review type, read from the checked-out commit (and remembered)."""
+    try:
+        rows = versions.summary(versions.for_commit(root, "HEAD"), stacks)
+    except Exception:  # noqa: BLE001 - showing versions is optional
+        return {"versions": []}
+    for r in rows:
+        r["label"] = REVIEWS[r["type"]]["label"]
+    return {"versions": rows, "versions_branch": git_ops.current_branch(root) or "the checked-out commit"}
 
 
 @app.post("/api/repo/fetch")
@@ -284,7 +297,16 @@ After the review, append exactly one block in this format. It is hidden from the
 Include every actionable finding from your review (issues, suggestions and line comments that call for a code change), most severe first. Leave out praise and points that need no code change. Do not mention this block in the review text."""
 
 
-def _code_prompt(info: dict, d: dict, body: CodeReviewIn, types: list[str], groups: dict) -> str:
+def _versions_section(root: str, d: dict, types: list[str]) -> str:
+    """Known framework/library versions for the prompt ('' if they can't be read; the review still runs)."""
+    try:
+        found = versions.for_commit(root, d["source_sha"])
+        return versions.prompt_section(found, types, git_ops.changed_paths(d["files"]))
+    except Exception:
+        return ""
+
+
+def _code_prompt(info: dict, d: dict, body: CodeReviewIn, types: list[str], groups: dict, known: str = "") -> str:
     parts = [
         f"Review the pull request that merges **{body.source}** into **{body.target}** "
         f"in repository `{info['name']}`" + (f" ({info['origin']})" if info["origin"] else "") + ".",
@@ -296,6 +318,8 @@ def _code_prompt(info: dict, d: dict, body: CodeReviewIn, types: list[str], grou
         f"## Changed files\n```\n{d['files'].strip()}\n```",
         f"## Diff stat\n```\n{d['stat'].strip()}\n```",
     ]
+    if known:
+        parts.insert(3, known)
     if d["truncated"]:
         parts.append(
             "The full diff is too large to include. Inspect it yourself with "
@@ -342,7 +366,7 @@ async def review_code(body: CodeReviewIn):
         _err(e)
     types, groups = detect.for_change(stacks, git_ops.changed_paths(d["files"]))
     if not types:
-        _err(ValueError("ReviewKit couldn't find a .NET, Angular or Ionic project in this repository, "
+        _err(ValueError("ReviewKit couldn't find a .NET, Python, Angular, Ionic, React or React Native project in this repository, "
                         "so it doesn't know which review rules to use."))
     label = detect.label(types)
     meta = {
@@ -356,7 +380,8 @@ async def review_code(body: CodeReviewIn):
         ev["markdown"], points = extract_points(ev["markdown"])
         return {"meta": {"points": points}}
 
-    gen = claude_runner.run(types, _code_prompt(info, d, body, types, groups), cwd=root, code=True)
+    known = await asyncio.to_thread(_versions_section, root, d, types)
+    gen = claude_runner.run(types, _code_prompt(info, d, body, types, groups, known), cwd=root, code=True)
 
     async def with_info():
         yield {"t": "info", "label": label, "counts": {REVIEWS[t]["label"]: len(groups.get(t, [])) for t in types}}
