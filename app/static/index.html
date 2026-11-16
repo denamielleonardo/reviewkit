@@ -80,9 +80,8 @@
           <div class="field">
             <label for="repoPath">Local repository</label>
             <div class="row">
-              <input id="repoPath" placeholder="C:\src\my-api" autocomplete="off" spellcheck="false">
-              <button class="btn ghost" id="browseBtn" title="Browse for folder">Browse</button>
-              <button class="btn secondary" id="openRepoBtn">Open</button>
+              <input id="repoPath" placeholder="Browse to your local clone" autocomplete="off" spellcheck="false">
+              <button class="btn secondary" id="browseBtn" title="Browse for folder">Browse</button>
             </div>
             <div class="chips" id="recentRepos"></div>
             <div class="repo-info hidden" id="repoInfo">
@@ -93,6 +92,7 @@
                 <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 11-2.6-6.4L21 8M21 3v5h-5"/></svg>Fetch
               </button>
             </div>
+            <div class="fetch-status muted small hidden" id="fetchStatus" aria-live="polite"></div>
           </div>
 
           <div class="field">
@@ -113,17 +113,16 @@
           <div class="branch-row">
             <div class="field">
               <label for="sourceBranch">Source branch</label>
-              <input id="sourceBranch" list="branchList" placeholder="feature/…" autocomplete="off" spellcheck="false">
+              <input id="sourceBranch" placeholder="Search branches…" autocomplete="off" spellcheck="false">
             </div>
             <button class="btn icon ghost swap" id="swapBtn" title="Swap branches" aria-label="Swap branches">
               <svg viewBox="0 0 24 24"><path d="M7 7h13l-4-4M17 17H4l4 4"/></svg>
             </button>
             <div class="field">
               <label for="targetBranch">Target branch</label>
-              <input id="targetBranch" list="branchList" placeholder="develop" autocomplete="off" spellcheck="false">
+              <input id="targetBranch" placeholder="Search branches…" autocomplete="off" spellcheck="false">
             </div>
           </div>
-          <datalist id="branchList"></datalist>
 
           <details class="field notes">
             <summary>Notes for the reviewer <span class="muted">(optional)</span></summary>
@@ -309,7 +308,10 @@
     <b id="ovTitle">Updating ReviewKit…</b>
     <div class="muted small" id="ovStatus">Downloading</div>
     <div class="bar"><span id="ovBar"></span></div>
-    <button class="btn ghost hidden" id="ovClose">Continue without updating</button>
+    <div class="row wrap ov-actions">
+      <button class="btn ghost hidden" id="ovClose">Continue without updating</button>
+      <button class="btn primary hidden" id="ovRetry">Try again</button>
+    </div>
   </div>
 </div>
 

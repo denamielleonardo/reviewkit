@@ -93,6 +93,219 @@ function guarded(fn) {
   };
 }
 
+// ---------- dropdowns ----------
+const CHEVRON = `<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>`;
+const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const highlight = (text, q) => q ? escapeHtml(text).replace(new RegExp(`(${escRe(escapeHtml(q))})`, "ig"), "<mark>$1</mark>") : escapeHtml(text);
+
+// Dropdown lists float above the page (fixed position), so a scrolling card can't clip them. They sit
+// under the field, or above it when there isn't room below, and follow the field while it scrolls.
+function placePanel(panel, anchor, minWidth = 0) {
+  const r = anchor.getBoundingClientRect(), gap = 6, margin = 8;
+  const width = Math.min(Math.max(r.width, minWidth), window.innerWidth - margin * 2);
+  const left = Math.min(Math.max(r.left, margin), window.innerWidth - width - margin);
+  const below = window.innerHeight - r.bottom - gap - margin, above = r.top - gap - margin;
+  const up = below < 220 && above > below;
+  Object.assign(panel.style, {
+    position: "fixed", left: `${left}px`, width: `${width}px`, right: "auto",
+    top: up ? "auto" : `${r.bottom + gap}px`, bottom: up ? `${window.innerHeight - r.top + gap}px` : "auto",
+    maxHeight: `${Math.max(Math.min(up ? above : below, 340), 140)}px`,
+  });
+}
+function followAnchor(panel, anchor, minWidth) {
+  const place = () => { if (!panel.classList.contains("hidden")) placePanel(panel, anchor, minWidth); };
+  window.addEventListener("resize", place);
+  document.addEventListener("scroll", (e) => { if (!panel.contains(e.target)) place(); }, true);
+  return place;
+}
+
+// Closes a dropdown when the user clicks elsewhere; the listener goes away with the dropdown.
+function onOutside(root, close) {
+  const h = (e) => {
+    if (!root.isConnected) return document.removeEventListener("mousedown", h, true);
+    if (!root.contains(e.target)) close();
+  };
+  document.addEventListener("mousedown", h, true);
+}
+
+// Searchable single-choice dropdown on an existing <input>. The input keeps the value, so anything
+// may still be typed; getItems() supplies the choices (e.g. the repository's branches).
+function combo(input, getItems, { empty = "No matches" } = {}) {
+  const wrap = document.createElement("div");
+  wrap.className = "combo";
+  input.parentNode.insertBefore(wrap, input);
+  wrap.appendChild(input);
+  wrap.insertAdjacentHTML("beforeend",
+    `<button type="button" class="combo-toggle" tabindex="-1" aria-label="Show choices">${CHEVRON}</button><div class="dd-panel hidden" role="listbox"></div>`);
+  const panel = $(".dd-panel", wrap), toggle = $(".combo-toggle", wrap);
+  input.setAttribute("role", "combobox");
+  input.setAttribute("aria-expanded", "false");
+  input.removeAttribute("list");
+  let active = -1, shown = [], filterOn = false;
+  const MAX = 150;
+
+  const render = () => {
+    const q = filterOn ? input.value.trim().toLowerCase() : "";
+    const all = getItems() || [];
+    const hits = q ? all.filter((b) => b.toLowerCase().includes(q)) : all;
+    shown = hits.slice(0, MAX);
+    active = Math.min(active, shown.length - 1);
+    panel.innerHTML = shown.length
+      ? shown.map((b, i) => `<div class="dd-opt${i === active ? " active" : ""}${b === input.value ? " current" : ""}" role="option" data-i="${i}">${highlight(b, q)}</div>`).join("")
+        + (hits.length > MAX ? `<div class="dd-meta">Showing ${MAX} of ${hits.length}. Type to narrow down.</div>` : "")
+      : `<div class="dd-empty">${all.length ? empty : "No branches yet. Open a repository or click Fetch."}</div>`;
+  };
+  const place = followAnchor(panel, input, 340);
+  const open = () => { if (!panel.classList.contains("hidden")) return; wrap.classList.add("open"); panel.classList.remove("hidden"); input.setAttribute("aria-expanded", "true"); render(); place(); };
+  const close = () => { wrap.classList.remove("open"); panel.classList.add("hidden"); input.setAttribute("aria-expanded", "false"); active = -1; filterOn = false; };
+  const pick = (i) => {
+    if (shown[i] === undefined) return;
+    input.value = shown[i];
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    close();
+  };
+  const move = (d) => {
+    if (!shown.length) return;
+    active = (active + d + shown.length) % shown.length;
+    render();
+    const el = panel.querySelector(".dd-opt.active");
+    if (el) el.scrollIntoView({ block: "nearest" });
+  };
+  input.addEventListener("focus", open);
+  input.addEventListener("click", open);
+  input.addEventListener("input", () => { filterOn = true; active = shown.length ? 0 : -1; open(); render(); });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); open(); move(1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); open(); move(-1); }
+    else if (e.key === "Enter" && !panel.classList.contains("hidden") && active >= 0) { e.preventDefault(); pick(active); }
+    else if (e.key === "Escape" || e.key === "Tab") close();
+  });
+  toggle.addEventListener("mousedown", (e) => { e.preventDefault(); if (panel.classList.contains("hidden")) { input.focus(); open(); } else close(); });
+  panel.addEventListener("mousedown", (e) => { e.preventDefault(); const o = e.target.closest(".dd-opt"); if (o) pick(+o.dataset.i); });
+  onOutside(wrap, close);
+  return { refresh: () => { if (!panel.classList.contains("hidden")) render(); } };
+}
+
+// Multi-choice people picker (Required reviewers, Send to): chips for the chosen people, a searchable
+// list with checkboxes, and "Other…" to add someone, who is then kept in the list on this PC.
+// people: [{email, name, custom}]; selected: [email]. Returns { values(), setPeople(list) }.
+function peoplePicker(root, { people, selected, placeholder = "Select people", onChange = () => {} }) {
+  let list = people.slice();
+  let chosen = [...new Set(selected)];
+  let q = "", active = -1;
+  root.classList.add("ms");
+  root.innerHTML = `
+    <div class="ms-control" tabindex="0" role="combobox" aria-expanded="false"><div class="ms-chips"></div><span class="ms-chev">${CHEVRON}</span></div>
+    <div class="dd-panel ms-panel hidden">
+      <input class="ms-search" placeholder="Search by name or email" autocomplete="off" spellcheck="false">
+      <div class="ms-list" role="listbox" aria-multiselectable="true"></div>
+      <div class="ms-other">
+        <button type="button" class="ms-other-btn">+ Other…</button>
+        <div class="ms-other-form hidden">
+          <input class="ms-o-email" placeholder="Email address" autocomplete="off" spellcheck="false">
+          <input class="ms-o-name" placeholder="Name (optional)" autocomplete="off">
+          <div class="row"><button type="button" class="btn tiny ghost ms-o-cancel">Cancel</button><button type="button" class="btn tiny primary ms-o-add">Add</button></div>
+        </div>
+      </div>
+    </div>`;
+  const control = $(".ms-control", root), chips = $(".ms-chips", root), panel = $(".ms-panel", root);
+  const search = $(".ms-search", root), box = $(".ms-list", root);
+  const person = (email) => list.find((p) => p.email.toLowerCase() === email.toLowerCase()) || { email, name: "" };
+  const label = (p) => p.name || p.email;
+
+  const renderChips = () => {
+    chips.innerHTML = chosen.length
+      ? chosen.map((e) => `<span class="ms-chip" title="${escapeHtml(e)}">${escapeHtml(label(person(e)))}<button type="button" data-e="${escapeHtml(e)}" aria-label="Remove ${escapeHtml(label(person(e)))}">×</button></span>`).join("")
+      : `<span class="ms-placeholder">${escapeHtml(placeholder)}</span>`;
+  };
+  const visible = () => {
+    // People chosen earlier who aren't in the list (e.g. typed in an older version) are still shown.
+    const extra = chosen.filter((e) => !list.some((p) => p.email.toLowerCase() === e.toLowerCase())).map((e) => ({ email: e, name: "" }));
+    const all = [...list, ...extra];
+    const t = q.trim().toLowerCase();
+    return t ? all.filter((p) => p.email.toLowerCase().includes(t) || p.name.toLowerCase().includes(t)) : all;
+  };
+  const renderList = () => {
+    const items = visible();
+    active = Math.min(active, items.length - 1);
+    box.innerHTML = items.length ? items.map((p, i) => {
+      const on = chosen.some((e) => e.toLowerCase() === p.email.toLowerCase());
+      return `<div class="dd-opt${i === active ? " active" : ""}" role="option" aria-selected="${on}" data-e="${escapeHtml(p.email)}">
+        <span class="ms-check"><svg viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg></span>
+        <span class="who"><b>${highlight(p.name || p.email, q.trim())}</b>${p.name ? `<span>${highlight(p.email, q.trim())}</span>` : ""}</span>
+        ${p.custom ? `<button type="button" class="dd-del" data-del="${escapeHtml(p.email)}" title="Remove from this list" aria-label="Remove ${escapeHtml(label(p))} from the list">×</button>` : ""}
+      </div>`;
+    }).join("") : `<div class="dd-empty">No one matches. Use “Other…” to add them.</div>`;
+  };
+  const changed = () => { renderChips(); renderList(); onChange(chosen.slice()); };
+  const toggle = (email) => {
+    const i = chosen.findIndex((e) => e.toLowerCase() === email.toLowerCase());
+    if (i >= 0) chosen.splice(i, 1); else chosen.push(email);
+    changed();
+  };
+  const isOpen = () => !panel.classList.contains("hidden");
+  const place = followAnchor(panel, control, 320);
+  const open = () => { if (isOpen()) return; root.classList.add("open"); panel.classList.remove("hidden"); control.setAttribute("aria-expanded", "true"); q = ""; search.value = ""; renderList(); place(); setTimeout(() => search.focus(), 0); };
+  const close = () => { root.classList.remove("open"); panel.classList.add("hidden"); control.setAttribute("aria-expanded", "false"); hideOther(); active = -1; };
+  const showOther = () => { $(".ms-other-btn", root).classList.add("hidden"); $(".ms-other-form", root).classList.remove("hidden"); const e = $(".ms-o-email", root); e.value = search.value.includes("@") ? search.value.trim() : ""; e.focus(); };
+  const hideOther = () => { $(".ms-other-btn", root).classList.remove("hidden"); $(".ms-other-form", root).classList.add("hidden"); $(".ms-o-email", root).value = ""; $(".ms-o-name", root).value = ""; };
+  const addOther = guarded(async () => {
+    const email = $(".ms-o-email", root).value.trim(), name = $(".ms-o-name", root).value.trim();
+    if (!/^[^@\s;,]+@[^@\s;,]+\.[^@\s;,]+$/.test(email)) { $(".ms-o-email", root).focus(); return toast("Enter an email address.", true); }
+    try {
+      const r = await getJSON("/api/pr/people", { method: "POST", body: { email, name } });
+      peoplePicker.shared(r.people);
+      if (!chosen.some((e) => e.toLowerCase() === email.toLowerCase())) chosen.push(email);
+      hideOther(); q = ""; search.value = ""; changed(); search.focus();
+      toast(`${name || email} added to the list`);
+    } catch (e) { toast(e.message, true); }
+  });
+
+  control.addEventListener("click", (e) => {
+    const x = e.target.closest(".ms-chip button");
+    if (x) { e.stopPropagation(); toggle(x.dataset.e); return; }
+    isOpen() ? close() : open();
+  });
+  control.addEventListener("keydown", (e) => { if (["Enter", " ", "ArrowDown"].includes(e.key)) { e.preventDefault(); open(); } });
+  search.addEventListener("input", () => { q = search.value; active = 0; renderList(); });
+  search.addEventListener("keydown", (e) => {
+    const items = visible();
+    if (e.key === "ArrowDown") { e.preventDefault(); active = (active + 1) % Math.max(items.length, 1); renderList(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); active = (active - 1 + items.length) % Math.max(items.length, 1); renderList(); }
+    else if (e.key === "Enter") { e.preventDefault(); if (items[active]) toggle(items[active].email); else if (!items.length) showOther(); }
+    else if (e.key === "Escape") { e.preventDefault(); close(); control.focus(); }
+    const el = box.querySelector(".dd-opt.active"); if (el) el.scrollIntoView({ block: "nearest" });
+  });
+  box.addEventListener("click", guarded(async (e) => {
+    const del = e.target.closest(".dd-del");
+    if (del) {
+      e.stopPropagation();
+      const email = del.dataset.del;
+      try { peoplePicker.shared((await getJSON("/api/pr/people/remove", { method: "POST", body: { email } })).people); }
+      catch (err) { return toast(err.message, true); }
+      chosen = chosen.filter((x) => x.toLowerCase() !== email.toLowerCase());
+      return changed();
+    }
+    const o = e.target.closest(".dd-opt");
+    if (o) toggle(o.dataset.e);
+  }));
+  $(".ms-other-btn", root).onclick = showOther;
+  $(".ms-o-cancel", root).onclick = () => { hideOther(); search.focus(); };
+  $(".ms-o-add", root).onclick = addOther;
+  [".ms-o-email", ".ms-o-name"].forEach((s) => $(s, root).addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addOther(); } if (e.key === "Escape") { e.preventDefault(); hideOther(); search.focus(); } }));
+  onOutside(root, close);
+  renderChips();
+
+  const api = { root, values: () => chosen.slice(), setPeople: (p) => { list = p.slice(); renderChips(); if (isOpen()) renderList(); } };
+  peoplePicker.instances.add(api);
+  return api;
+}
+// Every picker shows the same list, so someone added in one appears in the others straight away.
+peoplePicker.instances = new Set();
+peoplePicker.shared = (people) => peoplePicker.instances.forEach((p) => {
+  if (p.root.isConnected) p.setPeople(people); else peoplePicker.instances.delete(p);
+});
+
 // Has this exact review (same title) already been run recently? Returns the newest match.
 async function previousReview(title) {
   try { return (await getJSON("/api/history")).find((e) => e.title === title) || null; }
@@ -165,26 +378,37 @@ function renderRecent(repos) {
     const c = document.createElement("button");
     c.className = "chip";
     c.title = r;
-    c.textContent = r.split(/[\\/]/).filter(Boolean).pop();
+    c.textContent = repoLabel(r.split(/[\\/]/).filter(Boolean).pop());
     c.onclick = () => { $("#repoPath").value = r; openRepo(); };
     box.appendChild(c);
   });
 }
 
+// Folders cloned from Azure DevOps can be named "My%20Repo"; show them as "My Repo".
+function repoLabel(name) {
+  try { return decodeURIComponent(name); } catch (e) { return name; }
+}
+
+state.branches = [];
+const branchCombos = ["#sourceBranch", "#targetBranch"].map((s) => combo($(s), () => state.branches, { empty: "No branch matches. You can still type its full name." }));
 function setBranches(list) {
-  $("#branchList").innerHTML = list.map((b) => `<option value="${b.replace(/"/g, "&quot;")}">`).join("");
+  state.branches = list || [];
+  branchCombos.forEach((c) => c.refresh());
 }
 
 async function openRepo() {
   const path = $("#repoPath").value.trim();
-  if (!path) return toast("Enter or browse to your local clone first.", true);
-  const btn = $("#openRepoBtn");
+  if (!path) return toast("Browse to your local clone first.", true);
+  const btn = $("#browseBtn");
   busy(btn, true, "Opening");
   try {
     const info = await getJSON("/api/repo", { method: "POST", body: { path } });
     state.repo = info;
     $("#repoPath").value = info.root;
-    $("#repoName").textContent = info.name;
+    $("#repoName").textContent = repoLabel(info.name);
+    toast(`Opened ${repoLabel(info.name)} · ${info.branches.length} branch${info.branches.length === 1 ? "" : "es"}`);
+    $("#repoName").title = info.root;
+    $("#fetchStatus").classList.add("hidden");
     $("#repoOrigin").textContent = info.origin || "no origin remote";
     $("#repoInfo").classList.remove("hidden");
     renderStack(info.stack);
@@ -201,22 +425,40 @@ async function openRepo() {
   }
 }
 
+// Fetch is often done in about a second, so the result is spelled out next to the button
+// (what changed, and when) instead of only flashing a spinner and a toast.
 async function fetchRepo() {
   if (!state.repo) return;
-  const btn = $("#fetchBtn");
+  const btn = $("#fetchBtn"), status = $("#fetchStatus");
+  const before = new Set(state.branches || []);
   busy(btn, true, "Fetching");
+  status.classList.remove("hidden", "warn-text");
+  status.textContent = "Fetching from origin…";
+  const started = Date.now();
   try {
     const r = await getJSON("/api/repo/fetch", { method: "POST", body: { path: state.repo.root } });
+    await new Promise((ok) => setTimeout(ok, Math.max(0, 600 - (Date.now() - started))));  // let the spinner register
     setBranches(r.branches);
-    toast(`Fetched · ${r.branches.length} branches`);
+    const added = r.branches.filter((b) => !before.has(b));
+    const removed = [...before].filter((b) => !r.branches.includes(b));
+    const time = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const change = before.size === 0 ? `${r.branches.length} branch${r.branches.length === 1 ? "" : "es"}`
+      : added.length || removed.length
+        ? [added.length && `${added.length} new`, removed.length && `${removed.length} deleted`].filter(Boolean).join(", ") +
+          ` · ${r.branches.length} branch${r.branches.length === 1 ? "" : "es"}`
+        : `up to date · ${r.branches.length} branch${r.branches.length === 1 ? "" : "es"}`;
+    status.textContent = `Fetched at ${time} · ${change}` + (added.length && added.length <= 3 ? ` (new: ${added.join(", ")})` : "");
+    toast(`Fetched · ${change}`);
   } catch (e) {
+    status.classList.add("warn-text");
+    status.textContent = `Fetch failed: ${e.message}`;
     toast(e.message, true);
   } finally {
     busy(btn, false);
   }
 }
 
-$("#openRepoBtn").onclick = openRepo;
+// Repositories are opened with Browse (or a recent chip); Enter in the box also opens a pasted path.
 $("#repoPath").addEventListener("keydown", (e) => { if (e.key === "Enter") openRepo(); });
 $("#fetchBtn").onclick = fetchRepo;
 $("#browseBtn").onclick = async () => {
@@ -298,6 +540,7 @@ function showStatic(slotName, entry) {
   p.setState("done");
   p.body.innerHTML = renderMarkdown(entry.markdown);
   attachApply(p, entry);
+  attachPr(p, entry);
   return p;
 }
 
@@ -366,6 +609,7 @@ async function streamReview(slotName, title, sub, request, runBtn) {
           p.setSub(`${sub} · ${ev.seconds}s`);
           toast("Review complete");
           attachApply(p, ev.entry);
+          attachPr(p, ev.entry);
         } else if (ev.t === "error") {
           throw new Error(ev.v);
         }
@@ -462,6 +706,163 @@ $("#runTdBtn").onclick = guarded(async () => {
   fd.append("notes", $("#tdNotes").value);
   streamReview("td", state.docx.name, "Technical Design", { url: "/api/review/td", body: fd }, $("#runTdBtn"));
 });
+
+// ---------- pull request (Azure DevOps) + "[For Code Review]" email (Outlook on the web) ----------
+const PR_ICON = `<svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5v7M18 15.5V11a3 3 0 00-3-3h-4M13 5.5L10.5 8 13 10.5"/></svg>`;
+
+function prBox(panel) {
+  let box = $(".pr-box", panel.node);
+  if (!box) { box = document.createElement("div"); box.className = "apply pr-box"; $(".r-scroll", panel.node).appendChild(box); }
+  return box;
+}
+
+function attachPr(panel, entry) {
+  if (!entry || entry.kind !== "code") return;
+  const box = prBox(panel);
+  if (entry.pr) return renderPrDone(panel, box, entry);
+  box.innerHTML = `
+    <div class="apply-offer">
+      <div class="apply-icon">${PR_ICON}</div>
+      <div class="apply-text">
+        <b>Ready to ask for a code review?</b>
+        <span class="muted small">ReviewKit creates the pull request <b>${escapeHtml(entry.source)} → ${escapeHtml(entry.target)}</b> in Azure DevOps, then opens a “[For Code Review]” email in Outlook on the web for you to check and send.</span>
+      </div>
+      <div class="row"><button class="btn primary p-start">Create PR &amp; email</button></div>
+    </div>`;
+  const start = $(".p-start", box);
+  start.onclick = guarded(async () => {
+    busy(start, true, "Checking");
+    let prep;
+    try { prep = await getJSON(`/api/code/${entry.id}/pr`); }
+    catch (e) { busy(start, false); return toast(e.message, true); }
+    renderPrForm(panel, box, entry, prep);
+  });
+}
+
+function prEmailPreview(prId, title, greeting, url) {
+  const line = `Pull Request ${prId}: ${title}`;
+  return {
+    subject: `[For Code Review]: ${line}`,
+    body: `Hi ${greeting.trim() || "there"},\n\nGood day!\n\nI am kindly requesting a Code Review for the following:\n${line}\n${url}\n\nThank you!`,
+  };
+}
+
+function renderPrForm(panel, box, entry, prep) {
+  const ex = prep.existing;
+  box.innerHTML = `
+    <div class="apply-head">
+      <div><b>${ex ? `Pull Request ${ex.id} already exists` : "Create the pull request"}</b>
+        <div class="muted small">${escapeHtml(prep.repo_name)} · ${escapeHtml(prep.source)} → ${escapeHtml(prep.target)}</div></div>
+    </div>
+    ${prep.note ? `<div class="pr-note small"></div>` : ""}
+    ${ex ? `<div class="muted small pr-existing">ReviewKit uses the existing pull request: it adds any required reviewers below and opens the email.</div>` : ""}
+    <div class="pr-form">
+      <div class="field"><label for="prTitle-${entry.id}">Pull request title</label>
+        <input id="prTitle-${entry.id}" class="p-title" maxlength="400" autocomplete="off"${ex ? " readonly" : ""}></div>
+      ${ex ? "" : `<div class="field"><label for="prDesc-${entry.id}">Description <span class="muted">(Markdown)</span></label>
+        <textarea id="prDesc-${entry.id}" class="p-desc" rows="5" maxlength="4000"></textarea></div>`}
+      <div class="field"><label>Required reviewers <span class="muted">(optional)</span></label>
+        <div class="p-rev"></div></div>
+      <div class="pr-grid">
+        <div class="field"><label>Send to</label>
+          <div class="p-to"></div></div>
+        <div class="field"><label for="prGreet-${entry.id}">Greeting</label>
+          <input id="prGreet-${entry.id}" class="p-greet" placeholder="Sir" autocomplete="off"></div>
+      </div>
+      <div class="muted small">Required reviewers, Send to and Greeting are remembered on this PC for your next pull request in any repository. Use “Other…” in either list to add someone.</div>
+      <div class="field"><label>Email</label>
+        <div class="pr-preview"><div class="pr-subject"></div><pre class="pr-body"></pre>
+          <div class="muted small">Outlook adds your signature below this.</div></div></div>
+    </div>
+    <div class="apply-foot">
+      <span class="muted small">The email opens in your browser for you to check and send. ReviewKit never sends it.</span>
+      <div class="row"><button class="btn ghost p-cancel">Cancel</button><button class="btn primary p-go"></button></div>
+    </div>`;
+  if (prep.note) $(".pr-note", box).textContent = prep.note;
+  const title = $(".p-title", box), desc = $(".p-desc", box), greet = $(".p-greet", box);
+  const split = (s) => (s || "").split(/[;,\n]/).map((x) => x.trim()).filter(Boolean);
+  const rev = peoplePicker($(".p-rev", box), { people: prep.people || [], selected: split(prep.reviewers), placeholder: "Choose required reviewers" });
+  const to = peoplePicker($(".p-to", box), { people: prep.people || [], selected: split(prep.to), placeholder: "Choose who gets the email" });
+  title.value = ex ? ex.title : prep.title;
+  if (desc) desc.value = prep.description || "";
+  greet.value = prep.greeting || "";
+  const go = $(".p-go", box);
+  go.textContent = ex ? "Open email" : "Create PR & open email";
+  const sync = () => {
+    const m = prEmailPreview(ex ? ex.id : "<number>", title.value.trim() || "…", greet.value, ex ? ex.url : "<link to the pull request>");
+    $(".pr-subject", box).textContent = `Subject: ${m.subject}`;
+    $(".pr-body", box).textContent = m.body;
+  };
+  [title, greet].forEach((el) => el.addEventListener("input", sync));
+  sync();
+  $(".p-cancel", box).onclick = () => attachPr(panel, entry);
+  go.onclick = guarded(async () => {
+    const t = title.value.trim(), addrs = to.values(), reviewers = rev.values();
+    if (!t) { title.focus(); return toast("Enter a pull request title.", true); }
+    if (!addrs.length) { $(".p-to .ms-control", box).focus(); return toast("Choose who the email goes to.", true); }
+    const badAddr = addrs.find((a) => !/^[^@\s;,]+@[^@\s;,]+\.[^@\s;,]+$/.test(a));
+    if (badAddr) { return toast(`“${badAddr}” isn't an email address. Remove it from Send to.`, true); }
+    const names = (emails) => emails.map((e) => ((prep.people || []).find((p) => p.email.toLowerCase() === e.toLowerCase()) || {}).name || e).join(", ");
+    const yes = await ask({
+      title: ex ? "Open the review request email?" : "Create this pull request?",
+      message: ex
+        ? `Pull Request ${ex.id} already exists, so ReviewKit adds the required reviewers to it and opens the email. Nothing is sent until you click Send in Outlook.`
+        : "The pull request is created in Azure DevOps right away, where your team can see it. Then the email opens in your browser. Nothing is sent until you click Send in Outlook.",
+      details: [["Repository", prep.repo_name], ["Source → target", `${prep.source} → ${prep.target}`],
+                ["Title", ex ? `${ex.id}: ${t}` : t], ["Required reviewers", names(reviewers)], ["Email to", names(addrs)],
+                ["Greeting", greet.value.trim()]],
+      ok: ex ? "Open email" : "Create PR & open email",
+    });
+    if (!yes) return;
+    busy(go, true, ex ? "Opening" : "Creating");
+    try {
+      const r = await getJSON(`/api/code/${entry.id}/pr`, { method: "POST",
+        body: { title: t, description: desc ? desc.value : "", to: addrs.join("; "), greeting: greet.value, reviewers: reviewers.join("; ") } });
+      Object.assign(entry, r.entry || { pr: r.pr });
+      renderPrDone(panel, box, entry);
+      toast(r.pr.existing ? `Using Pull Request ${r.pr.id} · email opened` : `Pull Request ${r.pr.id} created · email opened`);
+    } catch (e) {
+      busy(go, false);
+      toast(e.message, true);
+    }
+  });
+}
+
+function renderPrDone(panel, box, entry) {
+  const pr = entry.pr;
+  box.innerHTML = `
+    <div class="apply-offer">
+      <div class="apply-icon">${PR_ICON}</div>
+      <div class="apply-text">
+        <b class="pr-done-title"></b>
+        <span class="muted small pr-done-sub"></span>
+      </div>
+      <div class="row wrap">
+        <button class="btn ghost p-open">Open pull request</button>
+        <button class="btn ghost p-mail">Open email again</button>
+        <button class="btn secondary p-again">Create PR &amp; email again</button>
+      </div>
+    </div>`;
+  $(".pr-done-title", box).textContent = `Pull Request ${pr.id}: ${pr.title}`;
+  $(".pr-done-sub", box).textContent = `${pr.existing ? "Existing pull request" : "Created"} ${pr.created || ""}` +
+    ((pr.reviewers || []).length ? ` · required reviewers: ${pr.reviewers.join(", ")}` : "") + ` · review request to ${pr.to}`;
+  const open = (what) => guarded(async () => {
+    try { await getJSON(`/api/code/${entry.id}/pr/open`, { method: "POST", body: { what } }); }
+    catch (e) { toast(e.message, true); }
+  });
+  $(".p-open", box).onclick = open("pr");
+  $(".p-mail", box).onclick = open("email");
+  // Back to the form: an open PR for these branches is reused (only the email is redone);
+  // if the earlier PR was completed or abandoned, a new one is created.
+  const again = $(".p-again", box);
+  again.onclick = guarded(async () => {
+    busy(again, true, "Checking");
+    let prep;
+    try { prep = await getJSON(`/api/code/${entry.id}/pr`); }
+    catch (e) { busy(again, false); return toast(e.message, true); }
+    renderPrForm(panel, box, entry, prep);
+  });
+}
 
 // ---------- apply TD review points ----------
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
@@ -954,6 +1355,8 @@ async function installUpdate() {
   const ov = $("#updateOverlay"), status = $("#ovStatus"), bar = $("#ovBar");
   $("#ovTitle").textContent = `Updating ReviewKit${updateInfo && updateInfo.latest ? ` to ${updateInfo.latest}` : ""}…`;
   $("#ovClose").classList.add("hidden");
+  $("#ovRetry").classList.add("hidden");
+  status.textContent = "Checking the latest version…";
   bar.style.width = "0";
   ov.classList.remove("hidden");
   try {
@@ -986,9 +1389,15 @@ async function installUpdate() {
   } catch (e) {
     status.textContent = e.message;
     $("#ovTitle").textContent = "Update failed";
-    const close = $("#ovClose");
+    const close = $("#ovClose"), retry = $("#ovRetry");
     close.classList.remove("hidden");
-    close.onclick = () => ov.classList.add("hidden");
+    retry.classList.remove("hidden");
+    close.onclick = () => {
+      ov.classList.add("hidden");
+      // Keep the update offer visible so it can be retried later from the banner or Settings.
+      if (updateInfo && updateInfo.available && updateInfo.can_install) $("#updateBar").classList.remove("hidden");
+    };
+    retry.onclick = guarded(() => installUpdate());
   }
 }
 $("#updateNow").onclick = guarded(async () => {

@@ -13,11 +13,13 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
 from typing import Iterator
 
+from . import net
 from .paths import data_dir
 
 UPDATE_BASE = os.environ.get("REVIEWKIT_UPDATE_URL", "https://denamielleonardo.github.io/reviewkit/").rstrip("/") + "/"
@@ -48,9 +50,34 @@ def _writable(folder: Path) -> bool:
         return False
 
 
+TRIES = 3
+
+
+def _retrying(what: str):
+    """Run fn up to TRIES times on network errors (slow or flaky connections to the update server)."""
+    def wrap(fn):
+        def run(*a, **k):
+            for attempt in range(1, TRIES + 1):
+                try:
+                    return fn(*a, **k)
+                except (OSError, urllib.error.URLError) as e:
+                    if attempt == TRIES:
+                        raise RuntimeError(f"Couldn't reach the update server to {what} ({_reason(e)}). "
+                                           "Check your internet connection and try again.") from e
+                    time.sleep(2 * attempt)
+        return run
+    return wrap
+
+
+def _reason(e: Exception) -> str:
+    r = getattr(e, "reason", None) or e
+    return "timed out" if isinstance(r, TimeoutError) or "timed out" in str(r) else str(r)
+
+
+@_retrying("check for updates")
 def _fetch_manifest() -> dict:
     req = urllib.request.Request(f"{UPDATE_BASE}version.json?t={int(time.time())}", headers=_HEADERS)
-    with urllib.request.urlopen(req, timeout=15) as r:
+    with net.urlopen(req, timeout=20) as r:
         data = json.load(r)
     if not isinstance(data, dict) or not data.get("version"):
         raise RuntimeError("The update server returned an invalid version.json.")
@@ -98,19 +125,29 @@ def install() -> Iterator[dict]:
     _WORK.mkdir(parents=True, exist_ok=True)
     zpath = _WORK / "ReviewKit.zip"
 
-    req = urllib.request.Request(url, headers=_HEADERS)
     h = hashlib.sha256()
-    with urllib.request.urlopen(req, timeout=60) as r, open(zpath, "wb") as out:
-        total = int(r.headers.get("Content-Length") or info.get("size") or 0)
-        done, last = 0, -1
-        while chunk := r.read(1 << 16):
-            out.write(chunk)
-            h.update(chunk)
-            done += len(chunk)
-            pct = int(done * 100 / total) if total else 0
-            if pct != last:
-                last = pct
-                yield {"t": "progress", "v": pct, "done": done, "total": total}
+    for attempt in range(1, TRIES + 1):  # a dropped connection restarts the download
+        h = hashlib.sha256()
+        try:
+            req = urllib.request.Request(url, headers=_HEADERS)
+            with net.urlopen(req, timeout=60) as r, open(zpath, "wb") as out:
+                total = int(r.headers.get("Content-Length") or info.get("size") or 0)
+                done, last = 0, -1
+                while chunk := r.read(1 << 16):
+                    out.write(chunk)
+                    h.update(chunk)
+                    done += len(chunk)
+                    pct = int(done * 100 / total) if total else 0
+                    if pct != last:
+                        last = pct
+                        yield {"t": "progress", "v": pct, "done": done, "total": total}
+            break
+        except (OSError, urllib.error.URLError) as e:
+            if attempt == TRIES:
+                raise RuntimeError(f"The download kept failing ({_reason(e)}). Check your internet connection "
+                                   "and try again.") from e
+            yield {"t": "status", "v": f"Connection problem ({_reason(e)}). Retrying download, attempt {attempt + 1} of {TRIES}…"}
+            time.sleep(2 * attempt)
     if expected and h.hexdigest() != expected:
         raise RuntimeError("The downloaded update failed its integrity check. Try again later.")
 

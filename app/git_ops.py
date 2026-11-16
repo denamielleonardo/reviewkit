@@ -85,6 +85,28 @@ def rev(repo: str, ref: str) -> str:
     return _git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}").strip()
 
 
+def remote_sha(repo: str, branch: str) -> str:
+    """Commit of origin/<branch> as of the last fetch ('' when the branch isn't on origin)."""
+    try:
+        return rev(repo, f"origin/{branch.strip().removeprefix('origin/')}")
+    except GitError:
+        return ""
+
+
+def commit_subjects(repo: str, target: str, source: str) -> list[str]:
+    """Subject lines of the commits on origin/<source> that aren't on origin/<target>, oldest first (no merges)."""
+    t, s = (f"origin/{b.strip().removeprefix('origin/')}" for b in (target, source))
+    out = _git(repo, "log", "--no-merges", "--reverse", "--format=%s", f"{t}..{s}")
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def count_commits(repo: str, older: str, newer: str) -> int:
+    try:
+        return int(_git(repo, "rev-list", "--count", f"{older}..{newer}").strip() or 0)
+    except (GitError, ValueError):
+        return 0
+
+
 def current_branch(repo: str) -> str:
     """Checked-out branch name, or '' when HEAD is detached."""
     try:

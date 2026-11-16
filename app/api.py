@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import threading
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -12,7 +13,8 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import claude_runner, detect, docx_editor, git_ops, history, settings, updater, versions
+from . import (azure_devops, claude_runner, detect, docx_editor, git_ops, history, review_request, settings,
+               updater, versions)
 from .docx_reader import docx_to_text
 from .paths import STATIC_DIR
 from .skills import REVIEWS
@@ -294,7 +296,30 @@ After the review, append exactly one block in this format. It is hidden from the
 <!-- REVIEW_POINTS
 [{"id": "CP1", "severity": "Critical|High|Medium|Low", "file": "<repo-relative path of the file to change>", "line": "<line number or range, or empty>", "title": "<short title>", "change": "<the concrete code change that resolves it>"}]
 -->
-Include every actionable finding from your review (issues, suggestions and line comments that call for a code change), most severe first. Leave out praise and points that need no code change. Do not mention this block in the review text."""
+Include every actionable finding from your review (issues, suggestions and line comments that call for a code change), most severe first. Leave out praise and points that need no code change.
+
+Then append one more hidden block, used for the pull request this change will be submitted as:
+<!-- PR_SUMMARY
+{"summary": "<what the change does, as a short sentence-case phrase of 4-12 words, e.g. Fill the company location from the map pin; no ticket number, no type prefix, no trailing period>"}
+-->
+Do not mention either block in the review text."""
+
+_SUMMARY_RE = re.compile(r"<!--\s*PR_SUMMARY\s*(.*?)-->", re.S)
+
+
+def extract_pr_summary(markdown: str) -> tuple[str, dict]:
+    """Split the hidden PR_SUMMARY block off the review; returns (markdown, {"pr_summary"})."""
+    m = _SUMMARY_RE.search(markdown)
+    if not m:
+        return markdown, {}
+    clean = (markdown[: m.start()] + markdown[m.end():]).strip()
+    try:
+        raw = json.loads(m.group(1).strip())
+    except json.JSONDecodeError:
+        return clean, {}
+    if not isinstance(raw, dict):
+        return clean, {}
+    return clean, {"pr_summary": str(raw.get("summary", "")).strip()}
 
 
 def _versions_section(root: str, d: dict, types: list[str]) -> str:
@@ -377,8 +402,9 @@ async def review_code(body: CodeReviewIn):
     }
 
     def on_done(ev):
-        ev["markdown"], points = extract_points(ev["markdown"])
-        return {"meta": {"points": points}}
+        md, pr = extract_pr_summary(ev["markdown"])
+        ev["markdown"], points = extract_points(md)
+        return {"meta": {"points": points, **pr}}
 
     known = await asyncio.to_thread(_versions_section, root, d, types)
     gen = claude_runner.run(types, _code_prompt(info, d, body, types, groups, known), cwd=root, code=True)
@@ -666,6 +692,143 @@ async def code_open_folder(entry_id: str):
     return {"ok": True}
 
 
+# ---------- pull request + review request email ----------
+
+class PrIn(BaseModel):
+    title: str
+    description: str = ""
+    to: str
+    greeting: str = ""
+    reviewers: str = ""  # required reviewers, free text: emails or names separated by ';'
+
+
+class OpenIn(BaseModel):
+    what: str  # "pr" | "email"
+
+
+def _code_entry(entry_id: str) -> dict:
+    entry = history.get(entry_id)
+    if not entry or entry.get("kind") != "code":
+        raise HTTPException(404, "Review not found.")
+    if not Path(entry.get("repo", "")).is_dir():
+        _err(ValueError("The repository folder for this review isn't available any more."))
+    return entry
+
+
+def _branches(entry: dict) -> tuple[str, str]:
+    return entry["source"].strip().removeprefix("origin/"), entry["target"].strip().removeprefix("origin/")
+
+
+def _pr_prepare(entry: dict) -> dict:
+    root = entry["repo"]
+    source, target = _branches(entry)
+    repo = azure_devops.from_repo(root)
+    head = git_ops.remote_sha(root, source)
+    if not head:
+        raise azure_devops.AzureError(f"{source} isn't on Azure DevOps yet (or ReviewKit hasn't fetched it). "
+                                      "Push the branch, click Fetch, then try again.")
+    if not git_ops.remote_sha(root, target):
+        raise azure_devops.AzureError(f"The target branch {target} isn't on Azure DevOps.")
+    note = ""
+    if entry.get("source_sha") and head != entry["source_sha"]:
+        n = git_ops.count_commits(root, entry["source_sha"], head)
+        note = (f"{source} has {n} new commit{'s' if n != 1 else ''} since this review. "
+                if n else f"{source} has changed since this review. ") + "The pull request includes the branch as it is now."
+    s = settings.load()
+    return {
+        "repo_name": repo.name, "source": source, "target": target,
+        "title": review_request.pr_title(source, entry.get("pr_summary", "")),
+        "description": review_request.pr_description(git_ops.commit_subjects(root, target, source)),
+        "to": s.get("pr_to", ""), "greeting": s.get("pr_greeting", ""), "reviewers": s.get("pr_reviewers", ""),
+        "people": review_request.people(s.get("pr_people", [])),
+        "existing": azure_devops.find_pr(repo, source, target),
+        "note": note,
+    }
+
+
+@app.get("/api/code/{entry_id}/pr")
+async def pr_prepare(entry_id: str):
+    entry = _code_entry(entry_id)
+    try:
+        return await asyncio.to_thread(_pr_prepare, entry)
+    except (azure_devops.AzureError, git_ops.GitError) as e:
+        _err(e)
+
+
+def _pr_create(entry_id: str, entry: dict, body: PrIn) -> dict:
+    root = entry["repo"]
+    source, target = _branches(entry)
+    to, greeting, wanted = body.to.strip(), body.greeting.strip(), body.reviewers.strip()
+    # Remembered for the next pull request in any repository, even if this one fails below.
+    settings.save({"pr_to": to, "pr_greeting": greeting, "pr_reviewers": wanted})
+    repo = azure_devops.from_repo(root)
+    reviewers = azure_devops.resolve_reviewers(repo, review_request.split_list(wanted))  # before creating anything
+    pr = azure_devops.find_pr(repo, source, target)  # never create a second PR for the same branches
+    existing = bool(pr)
+    if pr:
+        azure_devops.require_reviewers(repo, pr["id"], reviewers)
+    else:
+        pr = azure_devops.create_pr(repo, source, target, body.title.strip(), body.description.strip(), reviewers)
+    record = {**pr, "existing": existing, "to": to, "greeting": greeting,
+              "reviewers": [r["name"] for r in reviewers],
+              "created": time.strftime("%Y-%m-%d %H:%M"), "repo_name": repo.name}
+    updated = history.update(entry_id, {"pr": record})
+    os.startfile(review_request.compose_url(to, pr, greeting))
+    return {"pr": record, "entry": updated}
+
+
+@app.post("/api/code/{entry_id}/pr")
+async def pr_create(entry_id: str, body: PrIn):
+    entry = _code_entry(entry_id)
+    if not body.title.strip():
+        _err(ValueError("Enter a pull request title."))
+    if not review_request.split_list(body.to):
+        _err(ValueError("Enter who the email goes to."))
+    bad = review_request.bad_addresses(body.to)
+    if bad:
+        _err(ValueError(f"“{bad[0]}” isn't an email address. Separate several addresses with ;"))
+    try:
+        return await asyncio.to_thread(_pr_create, entry_id, entry, body)
+    except (azure_devops.AzureError, git_ops.GitError) as e:
+        _err(e)
+
+
+class PersonIn(BaseModel):
+    email: str
+    name: str = ""
+
+
+@app.post("/api/pr/people")
+async def add_person(body: PersonIn):
+    """Add someone with "Other…": kept on this PC and listed in the dropdowns from now on."""
+    email, name = body.email.strip(), body.name.strip()
+    if not review_request.valid_email(email):
+        _err(ValueError(f"“{email}” isn't an email address."))
+    custom = [p for p in settings.load().get("pr_people", []) if p.get("email", "").lower() != email.lower()]
+    if email.lower() not in {p["email"].lower() for p in review_request.PEOPLE}:
+        custom.append({"email": email, "name": name})
+    settings.save({"pr_people": custom})
+    return {"people": review_request.people(custom)}
+
+
+@app.post("/api/pr/people/remove")
+async def remove_person(body: PersonIn):
+    custom = [p for p in settings.load().get("pr_people", []) if p.get("email", "").lower() != body.email.strip().lower()]
+    settings.save({"pr_people": custom})
+    return {"people": review_request.people(custom)}
+
+
+@app.post("/api/code/{entry_id}/pr/open")
+async def pr_open(entry_id: str, body: OpenIn):
+    entry = history.get(entry_id)
+    pr = (entry or {}).get("pr")
+    if not pr:
+        raise HTTPException(404, "No pull request for this review yet.")
+    url = pr["url"] if body.what == "pr" else review_request.compose_url(pr.get("to", ""), pr, pr.get("greeting", ""))
+    os.startfile(url)
+    return {"ok": True}
+
+
 @app.post("/api/td/{entry_id}/open")
 async def open_reviewed(entry_id: str):
     p = history.file_path(entry_id, "reviewed.docx")
@@ -753,6 +916,18 @@ async def export_history(entry_id: str):
 
 
 # ---------- UI ----------
+
+@app.middleware("http")
+async def no_stale_ui(request, call_next):
+    """Make the window re-check the UI files on every load (cheap: they come from this PC).
+
+    Without this the embedded browser may keep an older app.js after an update, which breaks
+    the page when it no longer matches the new index.html."""
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
 
 @app.get("/")
 async def index():
