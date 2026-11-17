@@ -1467,7 +1467,7 @@ const ACTIONS = {
   "history.clear": ["Cleared history", "danger"],
   "settings.change": ["Changed settings", ""],
 };
-const admin = { users: [], logs: [], more: false, loaded: false };
+const admin = { users: [], logs: [], more: false, loaded: false, selected: null };
 const fmtWhen = (iso) => {
   if (!iso) return "";
   const d = new Date(iso), now = new Date();
@@ -1490,6 +1490,10 @@ function describeEvent(e) {
         d.needs_input && `${d.needs_input} need input`, d.failed && `${d.failed} failed`, d.files != null && plural(d.files, "file")].filter(Boolean).join(" · ");
     case "pr.create":
       return [`${d.existing ? "Reused" : "Created"} PR ${d.pr_id}`, d.repo, d.source && `${d.source} → ${d.target}`, d.reviewers && plural(d.reviewers, "reviewer")].filter(Boolean).join(" · ");
+    case "history.export":
+    case "history.delete":
+      return [d.kind === "td" ? "TD review" : d.kind === "code" ? "Code review" : "", d.title].filter(Boolean).join(" · ");
+    case "td_review.save_document": return d.document || "";
     case "history.clear": return plural(d.deleted || 0, "review") + " deleted";
     case "settings.change": return (d.keys || []).join(", ");
     case "app.update": return d.from_version ? `from ${d.from_version}` : "";
@@ -1525,92 +1529,144 @@ async function refreshAdmin() {
   try {
     admin.users = await adminFetch("/api/admin/users");
     admin.loaded = true;
-    renderUsers();
-    await loadLogs(false);
-  } catch (e) { toast(e.message, true); }
+  } catch (e) { return toast(e.message, true); }
+  renderUsers();
+  const u = admin.selected && admin.users.find((x) => x.email === admin.selected);
+  if (u) { renderUser(u); await loadLogs(false); } else showUserList();
 }
+const myEmail = () => (state.status && state.status.activity && state.status.activity.email) || "";
+const CHEV_RIGHT = `<svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>`;
+
+// ----- list of users -----
 function renderUsers() {
   $("#adminUserCount").textContent = String(admin.users.length);
-  const me = (state.status && state.status.activity && state.status.activity.email) || "";
+  const q = $("#adminSearch").value.trim().toLowerCase();
+  const rows = admin.users.filter((u) => !q || `${u.email} ${u.claude_org || ""} ${u.machine || ""}`.toLowerCase().includes(q));
   const body = $("#adminUsers tbody");
-  body.innerHTML = admin.users.length ? "" : `<tr><td colspan="6" class="empty">No one has used ReviewKit yet.</td></tr>`;
-  admin.users.forEach((u) => {
+  body.innerHTML = rows.length ? "" : `<tr><td colspan="5" class="empty">${admin.users.length ? "No users match." : "No one has used ReviewKit yet."}</td></tr>`;
+  rows.forEach((u) => {
     const tr = document.createElement("tr");
-    tr.className = u.is_active ? "" : "off";
-    tr.innerHTML = `<td class="who"><a></a><span class="muted small"></span></td><td></td><td class="small"></td>
-      <td class="nowrap"></td><td class="nowrap muted"></td><td><label class="toggle"><input type="checkbox"><span></span></label></td>`;
+    tr.className = "clickable" + (u.is_active ? "" : " off");
+    tr.tabIndex = 0;
+    tr.title = "Show this user's activity";
+    tr.innerHTML = `<td class="who"><b></b><span class="muted small"></span></td><td></td><td class="nowrap"></td>
+      <td><span class="pill"></span></td><td class="chev">${CHEV_RIGHT}</td>`;
     const tds = $$("td", tr);
-    $("a", tds[0]).textContent = u.email;
-    $("a", tds[0]).title = "Show this user's activity";
-    $("a", tds[0]).onclick = () => { $("#adminLogUser").value = u.email; loadLogs(false); };
-    $("span", tds[0]).textContent = u.auth_method === "api_key" ? "API key" : "";
+    $("b", tds[0]).textContent = u.email;
+    $("span", tds[0]).textContent = [u.email === myEmail() && "You", u.auth_method === "api_key" && "API key"].filter(Boolean).join(" · ");
     tds[1].textContent = u.claude_org || "—";
-    tds[2].textContent = [u.machine, u.app_version].filter(Boolean).join(" · ") || "—";
-    tds[3].textContent = fmtWhen(u.last_seen);
-    tds[4].textContent = fmtWhen(u.first_seen);
-    const box = $("input", tds[5]), lbl = $("span", tds[5]);
-    box.checked = u.is_active;
-    lbl.textContent = u.is_active ? "Allowed" : "Turned off";
-    if (u.email === me) { box.disabled = true; box.parentElement.title = "You can't turn off your own access."; }
-    box.onchange = guarded(async () => {
-      const on = box.checked;
-      if (!on && !await ask({
-        title: `Turn off ${u.email}?`,
-        message: "They can't run reviews, apply points or create pull requests until you turn them back on. It takes effect within about 10 minutes, or as soon as they restart ReviewKit.",
-        ok: "Turn off", danger: true,
-      })) { box.checked = true; return; }
-      try {
-        const row = await adminFetch("/api/admin/users/active", { method: "POST", body: { email: u.email, active: on } });
-        Object.assign(u, row);
-        renderUsers();
-        toast(on ? `${u.email} can use ReviewKit again` : `${u.email} is turned off`);
-      } catch (e) { box.checked = !on; toast(e.message, true); }
-    });
+    tds[2].textContent = fmtWhen(u.last_seen);
+    const pill = $(".pill", tds[3]);
+    pill.textContent = u.is_active ? "Allowed" : "Turned off";
+    pill.classList.add(u.is_active ? "on" : "off");
+    tr.onclick = () => openUser(u.email);
+    tr.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openUser(u.email); } };
     body.appendChild(tr);
   });
-  const sel = $("#adminLogUser"), keep = sel.value;
-  sel.innerHTML = `<option value="">Everyone</option>`;
-  admin.users.forEach((u) => { const o = document.createElement("option"); o.value = o.textContent = u.email; sel.appendChild(o); });
-  sel.value = admin.users.some((u) => u.email === keep) ? keep : "";
+}
+$("#adminSearch").addEventListener("input", renderUsers);
+function showUserList() {
+  admin.selected = null;
+  $("#adminUserView").classList.add("hidden");
+  $("#adminListCard").classList.remove("hidden");
+}
+$("#adminBack").onclick = () => { showUserList(); renderUsers(); };
+
+// ----- one user -----
+async function openUser(email) {
+  const u = admin.users.find((x) => x.email === email);
+  if (!u) return;
+  admin.selected = email;
+  admin.logs = [];
+  $("#adminLogAction").value = "";
+  $("#adminListCard").classList.add("hidden");
+  $("#adminUserView").classList.remove("hidden");
+  renderUser(u);
+  $("#adminLogs tbody").innerHTML = `<tr><td colspan="3" class="empty">Loading…</td></tr>`;
+  $(".view-body", $("#view-admin")).scrollTop = 0;
+  await loadLogs(false);
+}
+function renderUser(u) {
+  $("#auAvatar").textContent = (u.email || "?")[0];
+  $("#auEmail").textContent = u.email;
+  $("#auSub").textContent = [u.email === myEmail() && "You", u.is_active ? "Allowed to use ReviewKit" : "Access turned off"].filter(Boolean).join(" · ");
+  const facts = [
+    ["Claude org", u.claude_org || "—"],
+    ["Signs in with", u.auth_method === "api_key" ? "API key" : (u.auth_method ? "Claude account" : "—")],
+    ["PC", u.machine || "—"],
+    ["ReviewKit version", u.app_version || "—"],
+    ["Last active", fmtWhen(u.last_seen)],
+    ["First seen", fmtWhen(u.first_seen)],
+  ];
+  const dl = $("#auFacts");
+  dl.innerHTML = "";
+  facts.forEach(([k, v]) => {
+    const div = document.createElement("div");
+    div.innerHTML = "<dt></dt><dd></dd>";
+    $("dt", div).textContent = k;
+    $("dd", div).textContent = v;
+    dl.appendChild(div);
+  });
+  const label = $("#auAccess"), box = $("input", label), text = $("span", label);
+  box.checked = u.is_active;
+  text.textContent = u.is_active ? "Access on" : "Access off";
+  const self = u.email === myEmail();
+  box.disabled = self;
+  label.title = self ? "You can't turn off your own access." : "";
+  box.onchange = guarded(async () => {
+    const on = box.checked;
+    if (!on && !await ask({
+      title: `Turn off ${u.email}?`,
+      message: "They can't run reviews, apply points or create pull requests until you turn them back on. It takes effect within about 10 minutes, or as soon as they restart ReviewKit.",
+      ok: "Turn off", danger: true,
+    })) { box.checked = true; return; }
+    try {
+      const row = await adminFetch("/api/admin/users/active", { method: "POST", body: { email: u.email, active: on } });
+      Object.assign(u, row);
+      renderUser(u);
+      renderUsers();
+      toast(on ? `${u.email} can use ReviewKit again` : `${u.email} is turned off`);
+    } catch (e) { box.checked = !on; toast(e.message, true); }
+  });
   const act = $("#adminLogAction");
   if (act.options.length === 1) {
     Object.entries(ACTIONS).forEach(([k, [label]]) => { const o = document.createElement("option"); o.value = k; o.textContent = label; act.appendChild(o); });
   }
 }
 async function loadLogs(older) {
-  const q = new URLSearchParams();
-  if ($("#adminLogUser").value) q.set("email", $("#adminLogUser").value);
+  const email = admin.selected;
+  if (!email) return;
+  const q = new URLSearchParams({ email });
   if ($("#adminLogAction").value) q.set("action", $("#adminLogAction").value);
   if (older && admin.logs.length) q.set("before", admin.logs[admin.logs.length - 1].id);
-  try {
-    const rows = await adminFetch(`/api/admin/logs?${q}`);
-    admin.logs = older ? admin.logs.concat(rows) : rows;
-    admin.more = rows.length >= 200;
-  } catch (e) { return toast(e.message, true); }
+  let rows;
+  try { rows = await adminFetch(`/api/admin/logs?${q}`); } catch (e) { return toast(e.message, true); }
+  if (admin.selected !== email) return;  // another user was opened meanwhile
+  admin.logs = older ? admin.logs.concat(rows) : rows;
+  admin.more = rows.length >= 200;
   const body = $("#adminLogs tbody");
-  body.innerHTML = admin.logs.length ? "" : `<tr><td colspan="4" class="empty">No activity yet.</td></tr>`;
+  body.innerHTML = admin.logs.length ? "" : `<tr><td colspan="3" class="empty">No activity${$("#adminLogAction").value ? " of this kind" : ""} yet.</td></tr>`;
   admin.logs.forEach((e) => {
     const [label, kind] = ACTIONS[e.action] || [e.action, ""];
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td class="nowrap"></td><td></td><td><span class="act"></span></td><td class="details"></td>`;
+    tr.innerHTML = `<td class="nowrap"></td><td><span class="act"></span></td><td class="details"></td>`;
     const tds = $$("td", tr);
     tds[0].textContent = fmtWhen(e.occurred_at || e.created_at);
     tds[0].title = `On the PC: ${e.occurred_at || "?"}\nReceived: ${e.created_at}${e.machine ? `\nPC: ${e.machine}` : ""}${e.app_version ? `\nVersion: ${e.app_version}` : ""}`;
-    tds[1].textContent = e.email;
-    $(".act", tds[2]).textContent = label;
-    if (kind) $(".act", tds[2]).classList.add(`act-${kind}`);
-    tds[3].textContent = describeEvent(e);
+    $(".act", tds[1]).textContent = label;
+    if (kind) $(".act", tds[1]).classList.add(`act-${kind}`);
+    tds[2].textContent = describeEvent(e);
     body.appendChild(tr);
   });
   $("#adminMore").classList.toggle("hidden", !admin.more);
 }
-$("#adminLogUser").addEventListener("change", () => loadLogs(false));
 $("#adminLogAction").addEventListener("change", () => loadLogs(false));
 $("#adminMore").onclick = guarded(() => loadLogs(true));
 $("#adminRefresh").onclick = guarded(async () => { await refreshAdmin(); toast("Refreshed"); });
 $("#adminLock").onclick = guarded(async () => {
   await api("/api/admin/sign-out", { method: "POST" });
   admin.loaded = false;
+  showUserList();
   $("#adminPassword").value = "";
   adminLocked(true);
 });

@@ -191,12 +191,12 @@
       </div>
     </section>
 
-    <!-- USERS & ACTIVITY (admin only) -->
+    <!-- USERS (admin only): list, then one user's details and activity -->
     <section class="view" id="view-admin">
       <header class="page-head">
         <div>
-          <h1>Users &amp; activity</h1>
-          <p class="muted">Everyone who uses ReviewKit and what they did. Only the admin can open this page.</p>
+          <h1>Users</h1>
+          <p class="muted">Everyone who uses ReviewKit. Click a user to see their activity. Only the admin can open this page.</p>
         </div>
         <div class="row head-tools hidden" id="adminTools">
           <button class="btn ghost" id="adminRefresh">Refresh</button>
@@ -221,30 +221,51 @@
         </div>
 
         <div class="admin-panel hidden" id="adminPanel">
-          <div class="card">
-            <h2>Users <span class="badge" id="adminUserCount"></span></h2>
+          <!-- list of users -->
+          <div class="card" id="adminListCard">
+            <div class="card-head">
+              <h2>All users <span class="badge" id="adminUserCount"></span></h2>
+              <input class="search" id="adminSearch" placeholder="Search users…" autocomplete="off" spellcheck="false">
+            </div>
             <div class="table-wrap">
               <table class="data-table" id="adminUsers">
-                <thead><tr><th>User</th><th>Claude org</th><th>PC · version</th><th>Last active</th><th>First seen</th><th>Access</th></tr></thead>
+                <thead><tr><th>User</th><th>Claude org</th><th>Last active</th><th>Access</th><th aria-label="Open"></th></tr></thead>
                 <tbody></tbody>
               </table>
             </div>
           </div>
-          <div class="card">
-            <div class="card-head">
-              <h2>Activity</h2>
-              <div class="row wrap-row">
-                <select id="adminLogUser" aria-label="User"><option value="">Everyone</option></select>
+
+          <!-- one user -->
+          <div class="admin-user hidden" id="adminUserView">
+            <div><button class="btn ghost tiny" id="adminBack">
+              <svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>All users
+            </button></div>
+            <div class="card">
+              <div class="card-head">
+                <div class="user-title">
+                  <span class="avatar" id="auAvatar"></span>
+                  <div>
+                    <h2 id="auEmail"></h2>
+                    <div class="muted small" id="auSub"></div>
+                  </div>
+                </div>
+                <label class="toggle" id="auAccess"><input type="checkbox"><span></span></label>
+              </div>
+              <dl class="facts" id="auFacts"></dl>
+            </div>
+            <div class="card">
+              <div class="card-head">
+                <h2>Activity</h2>
                 <select id="adminLogAction" aria-label="Action"><option value="">All actions</option></select>
               </div>
+              <div class="table-wrap">
+                <table class="data-table" id="adminLogs">
+                  <thead><tr><th>When</th><th>Action</th><th>Details</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+              <div class="row admin-more"><button class="btn ghost hidden" id="adminMore">Load older</button></div>
             </div>
-            <div class="table-wrap">
-              <table class="data-table" id="adminLogs">
-                <thead><tr><th>When</th><th>User</th><th>Action</th><th>Details</th></tr></thead>
-                <tbody></tbody>
-              </table>
-            </div>
-            <div class="row admin-more"><button class="btn ghost hidden" id="adminMore">Load older</button></div>
           </div>
         </div>
       </div>
