@@ -9,11 +9,11 @@ import time
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (azure_devops, claude_runner, detect, docx_editor, git_ops, history, review_request, settings,
+from . import (activity, azure_devops, claude_runner, detect, docx_editor, git_ops, history, review_request, settings,
                updater, versions)
 from .docx_reader import docx_to_text
 from .paths import STATIC_DIR
@@ -48,6 +48,7 @@ class SettingsIn(BaseModel):
     auto_update: bool | None = None
     auto_archive: bool | None = None
     archive_dir: str | None = None
+    work_email: str | None = None
 
 
 def _err(e: Exception, code: int = 400):
@@ -65,10 +66,12 @@ def _purge_history() -> dict:
 async def status():
     auth = await asyncio.to_thread(claude_runner.auth_status)
     await asyncio.to_thread(_purge_history)
+    act = await asyncio.to_thread(activity.sync, auth, VERSION)
     return {
         "version": VERSION,
         "git": shutil.which("git") is not None,
         "auth": auth,
+        "activity": act,
         "reviews": [{"id": k, **v} for k, v in REVIEWS.items()],
     }
 
@@ -101,6 +104,7 @@ async def login_wait():
 
 @app.post("/api/logout")
 async def logout():
+    activity.log("claude.sign_out")
     await asyncio.to_thread(claude_runner.logout)
     return {"ok": True}
 
@@ -124,6 +128,10 @@ async def get_settings():
 @app.post("/api/settings")
 async def set_settings(body: SettingsIn):
     values = {k: v for k, v in body.model_dump().items() if v is not None}
+    if "work_email" in values:
+        values["work_email"] = values["work_email"].strip().lower()
+        if values["work_email"] and not re.fullmatch(r"[^@\s;,]+@[^@\s;,]+\.[^@\s;,]+", values["work_email"]):
+            _err(ValueError("Enter a valid work e-mail address."))
     if "archive_dir" in values:
         values["archive_dir"] = values["archive_dir"].strip().strip('"')
     archive_on = values.get("auto_archive", settings.load().get("auto_archive"))
@@ -138,6 +146,11 @@ async def set_settings(body: SettingsIn):
     saved = settings.save(values)
     if "auto_archive" in values or "archive_dir" in values:
         await asyncio.to_thread(_purge_history)
+    if "work_email" in values or "api_key" in values:
+        await asyncio.to_thread(activity.sync, await asyncio.to_thread(claude_runner.auth_status), VERSION)
+    changed = sorted(k for k in values if k != "theme")
+    if changed:
+        activity.log("settings.change", keys=changed)
     return _public_settings(saved)
 
 
@@ -166,6 +179,8 @@ def _quit_soon() -> None:
 
 @app.post("/api/update/install")
 def install_update():
+    activity.log("app.update", from_version=VERSION)
+
     def stream():
         try:
             for ev in updater.install():
@@ -238,9 +253,32 @@ def _ndjson(gen, meta: dict, on_done=None):
                 for suffix, data in extra.get("files", {}).items():
                     history.file_path(entry["id"], suffix).write_bytes(data)
                 ev["entry"] = entry
+                _log_review(entry)
             yield json.dumps(ev) + "\n"
 
     return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+
+def _log_review(entry: dict) -> None:
+    points = entry.get("points") or []
+    common = {"points": len(points), "seconds": entry.get("seconds"),
+              "critical": sum(1 for p in points if (p.get("severity") or "").lower() == "critical") or None}
+    if entry.get("kind") == "code":
+        activity.log("code_review.run", repo=_repo_name(entry), source=entry.get("source"),
+                     target=entry.get("target"), review=entry.get("review"), **common)
+    else:
+        activity.log("td_review.run", document=entry.get("title"), **common)
+
+
+def _status_counts(points: list[dict], selected: list[str]) -> dict:
+    done = [p for p in points if p.get("id") in selected]
+    return {"selected": len(selected), "applied": sum(1 for p in done if p.get("status") == "applied"),
+            "needs_input": sum(1 for p in done if p.get("status") == "needs_input"),
+            "failed": sum(1 for p in done if p.get("status") == "failed")}
+
+
+def _repo_name(entry: dict) -> str:
+    return entry.get("repo_name") or Path(entry.get("repo", "")).name
 
 
 def _stream_events(events):
@@ -397,7 +435,8 @@ async def review_code(body: CodeReviewIn):
     meta = {
         "kind": "code", "review": "+".join(types), "label": label,
         "title": f"{info['name']}: {body.source} → {body.target}",
-        "repo": root, "source": body.source.strip().removeprefix("origin/"), "target": body.target.strip(),
+        "repo": root, "repo_name": info["name"],
+        "source": body.source.strip().removeprefix("origin/"), "target": body.target.strip(),
         "source_sha": d["source_sha"], "types": types,
     }
 
@@ -508,6 +547,7 @@ async def apply_td(entry_id: str, body: ApplyIn):
         md = entry["markdown"].split("\n## Review point disposition")[0].rstrip()
         md += "\n\n" + _disposition_md(points)
         updated = history.update(entry_id, {"points": points, "reviewed_name": out_name}, md)
+        activity.log("td_review.apply", document=entry["title"], **_status_counts(points, selected))
         yield {"t": "done", "points": points, "entry": updated, "markdown": md,
                "file": out_name, "dropped": dropped}
 
@@ -654,6 +694,8 @@ async def apply_code(entry_id: str, body: ApplyIn):
             history.file_path(entry_id, "changes.diff").write_text(diff, encoding="utf-8")
         md = entry["markdown"].split("\n## Review point disposition")[0].rstrip() + "\n\n" + _disposition_md(points)
         updated = history.update(entry_id, {"points": points, "applied": applied}, md)
+        activity.log("code_review.apply", repo=_repo_name(entry), source=entry.get("source"),
+                     files=len(files) + len(new_files), **_status_counts(points, selected))
         yield {"t": "done", "points": points, "entry": updated, "markdown": md}
 
     return _stream_events(events())
@@ -680,6 +722,7 @@ async def code_undo(entry_id: str):
         p.pop("note", None)
     md = entry["markdown"].split("\n## Review point disposition")[0].rstrip()
     history.file_path(entry_id, "changes.diff").unlink(missing_ok=True)
+    activity.log("code_review.undo", repo=_repo_name(entry), source=entry.get("source"))
     return {"entry": history.update(entry_id, {"points": points, "applied": None}, md), "markdown": md}
 
 
@@ -773,6 +816,8 @@ def _pr_create(entry_id: str, entry: dict, body: PrIn) -> dict:
               "reviewers": [r["name"] for r in reviewers],
               "created": time.strftime("%Y-%m-%d %H:%M"), "repo_name": repo.name}
     updated = history.update(entry_id, {"pr": record})
+    activity.log("pr.create", repo=repo.name, pr_id=pr.get("id"), existing=existing, source=source, target=target,
+                 reviewers=len(reviewers))
     os.startfile(review_request.compose_url(to, pr, greeting))
     return {"pr": record, "entry": updated}
 
@@ -857,6 +902,7 @@ async def save_reviewed(entry_id: str):
         return {"ok": False}
     dest = result if isinstance(result, str) else result[0]
     shutil.copyfile(p, dest)
+    activity.log("td_review.save_document", document=e.get("title"))
     return {"ok": True, "path": dest}
 
 
@@ -884,12 +930,17 @@ async def get_history(entry_id: str):
 
 @app.delete("/api/history")
 async def clear_history():
-    return {"ok": True, "deleted": await asyncio.to_thread(history.clear)}
+    deleted = await asyncio.to_thread(history.clear)
+    activity.log("history.clear", deleted=deleted)
+    return {"ok": True, "deleted": deleted}
 
 
 @app.delete("/api/history/{entry_id}")
 async def delete_history(entry_id: str):
+    e = history.get(entry_id)
     history.delete(entry_id)
+    if e:
+        activity.log("history.delete", title=e.get("title"), kind=e.get("kind"))
     return {"ok": True}
 
 
@@ -912,7 +963,80 @@ async def export_history(entry_id: str):
         return {"ok": False}
     path = result if isinstance(result, str) else result[0]
     Path(path).write_text(e["markdown"], encoding="utf-8")
+    activity.log("history.export", title=e.get("title"), kind=e.get("kind"))
     return {"ok": True, "path": path}
+
+
+# ---------- users and activity (admin page) ----------
+
+class AdminSignInIn(BaseModel):
+    email: str
+    password: str = ""
+
+
+class AdminActiveIn(BaseModel):
+    email: str
+    active: bool
+
+
+async def _admin_call(fn, *args):
+    if not activity.ENABLED:
+        raise HTTPException(404, "This ReviewKit build isn't connected to Supabase.")
+    try:
+        return await asyncio.to_thread(fn, *args)
+    except activity.AdminAuthError as e:
+        raise HTTPException(401, str(e)) from None
+    except activity.SupabaseError as e:
+        raise HTTPException(502, f"Supabase: {e}") from None
+    except OSError as e:
+        raise HTTPException(503, f"Couldn't reach Supabase: {e}") from None
+
+
+@app.get("/api/admin/session")
+async def admin_session():
+    return activity.admin_status()
+
+
+@app.post("/api/admin/sign-in")
+async def admin_sign_in(body: AdminSignInIn):
+    if not body.email.strip() or not body.password:
+        _err(ValueError("Enter the admin e-mail and password."))
+    return await _admin_call(activity.admin_sign_in, body.email, body.password)
+
+
+@app.post("/api/admin/sign-out")
+async def admin_sign_out():
+    await asyncio.to_thread(activity.admin_sign_out)
+    return {"ok": True}
+
+
+@app.get("/api/admin/users")
+async def admin_users():
+    return await _admin_call(activity.admin_users)
+
+
+@app.get("/api/admin/logs")
+async def admin_logs(email: str = "", action: str = "", before: int | None = None):
+    return await _admin_call(activity.admin_logs, email, action, before)
+
+
+@app.post("/api/admin/users/active")
+async def admin_set_active(body: AdminActiveIn):
+    return await _admin_call(activity.admin_set_active, body.email, body.active)
+
+
+# Starting a review, applying points or creating a PR needs a user who hasn't been turned off.
+_GUARDED = re.compile(r"^/api/(review/(code|td)|code/[^/]+/(apply|pr)|td/[^/]+/apply)$")
+
+
+@app.middleware("http")
+async def require_access(request, call_next):
+    if activity.ENABLED and request.method == "POST" and _GUARDED.match(request.url.path):
+        await asyncio.to_thread(activity.ensure_synced)
+        reason = activity.access_error()
+        if reason:
+            return JSONResponse({"detail": reason}, status_code=403)
+    return await call_next(request)
 
 
 # ---------- UI ----------

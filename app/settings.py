@@ -11,6 +11,7 @@ _FILE = data_dir() / "settings.json"
 DEFAULTS = {
     "repos": [], "last_repo": "", "api_key": "", "model": "", "theme": "system",
     "auto_update": True, "auto_archive": False, "archive_dir": "",
+    "work_email": "",  # API-key users only: who they are in the activity log (Claude sign-in gives it otherwise)
     # Pull request + review request email, remembered for every repository once entered.
     "pr_to": "", "pr_greeting": "Sir", "pr_reviewers": "",
     "pr_people": [],  # people added with "Other…": [{"email", "name"}]

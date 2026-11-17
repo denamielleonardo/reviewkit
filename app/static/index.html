@@ -35,6 +35,10 @@
         <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 109-9 9.7 9.7 0 00-6.7 2.8L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg>
         <span>History</span>
       </button>
+      <button class="nav-item hidden" data-view="admin" id="adminNav">
+        <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0113 0M16 4.5a3.5 3.5 0 010 7M18 14.5a6.5 6.5 0 013.5 5.5"/></svg>
+        <span>Users</span>
+      </button>
       <button class="nav-item" data-view="settings">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg>
         <span>Settings</span>
@@ -187,6 +191,65 @@
       </div>
     </section>
 
+    <!-- USERS & ACTIVITY (admin only) -->
+    <section class="view" id="view-admin">
+      <header class="page-head">
+        <div>
+          <h1>Users &amp; activity</h1>
+          <p class="muted">Everyone who uses ReviewKit and what they did. Only the admin can open this page.</p>
+        </div>
+        <div class="row head-tools hidden" id="adminTools">
+          <button class="btn ghost" id="adminRefresh">Refresh</button>
+          <button class="btn ghost" id="adminLock" title="Sign out of the admin page">Lock</button>
+        </div>
+      </header>
+      <div class="view-body admin-body">
+        <div class="card admin-gate" id="adminGate">
+          <h2>Admin sign-in</h2>
+          <p class="muted small">Sign in with the admin account set up in Supabase to see users and activity. You stay signed in until you lock this page or close ReviewKit.</p>
+          <div class="field">
+            <label for="adminEmail">Admin e-mail</label>
+            <input id="adminEmail" type="email" autocomplete="username" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="adminPassword">Password</label>
+            <input id="adminPassword" type="password" autocomplete="current-password">
+          </div>
+          <div class="row">
+            <button class="btn primary" id="adminSignIn">Sign in</button>
+          </div>
+        </div>
+
+        <div class="admin-panel hidden" id="adminPanel">
+          <div class="card">
+            <h2>Users <span class="badge" id="adminUserCount"></span></h2>
+            <div class="table-wrap">
+              <table class="data-table" id="adminUsers">
+                <thead><tr><th>User</th><th>Claude org</th><th>PC · version</th><th>Last active</th><th>First seen</th><th>Access</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h2>Activity</h2>
+              <div class="row wrap-row">
+                <select id="adminLogUser" aria-label="User"><option value="">Everyone</option></select>
+                <select id="adminLogAction" aria-label="Action"><option value="">All actions</option></select>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table" id="adminLogs">
+                <thead><tr><th>When</th><th>User</th><th>Action</th><th>Details</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <div class="row admin-more"><button class="btn ghost hidden" id="adminMore">Load older</button></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- SETTINGS -->
     <section class="view" id="view-settings">
       <header class="page-head">
@@ -206,6 +269,20 @@
             <button class="btn ghost danger" id="logoutBtn">Sign out</button>
           </div>
           <p class="muted small">Sign in opens a console window and your browser. Finish signing in there. ReviewKit picks up the new sign-in automatically.</p>
+        </div>
+
+        <div class="card hidden" id="activityCard">
+          <h2>Activity log</h2>
+          <div class="status-line" id="activityStatus"></div>
+          <p class="muted small">ReviewKit records what you do in it (reviews run, points applied, pull requests created) for the team's ReviewKit admin. It sends names and counts only, never your code, diffs or review text.</p>
+          <div class="field hidden" id="workEmailField">
+            <label for="workEmail">Your work e-mail</label>
+            <div class="row">
+              <input id="workEmail" type="email" placeholder="name@company.com" autocomplete="email" spellcheck="false">
+              <button class="btn secondary" id="saveWorkEmail">Save</button>
+            </div>
+            <div class="muted small">You use an API key, so ReviewKit can't tell who you are from a Claude sign-in. Reviews start once this is saved.</div>
+          </div>
         </div>
 
         <div class="card">
@@ -311,6 +388,17 @@
     <div class="row wrap ov-actions">
       <button class="btn ghost hidden" id="ovClose">Continue without updating</button>
       <button class="btn primary hidden" id="ovRetry">Try again</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay hidden" id="blockedOverlay" role="alertdialog" aria-modal="true" aria-labelledby="blTitle">
+  <div class="card overlay-card">
+    <img class="logo big" src="/static/logo.svg" alt="">
+    <b id="blTitle">Your access is turned off</b>
+    <div class="muted small" id="blText">The ReviewKit admin has turned off access for <span id="blEmail"></span>. Ask them to turn it back on.</div>
+    <div class="row wrap ov-actions">
+      <button class="btn secondary" id="blRetry">Check again</button>
     </div>
   </div>
 </div>

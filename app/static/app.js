@@ -335,6 +335,7 @@ function show(view) {
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${view}`));
   if (view === "history") loadHistory();
   if (view === "settings") loadSettings();
+  if (view === "admin") loadAdmin();
 }
 $$("[data-view]").forEach((b) => b.addEventListener("click", () => show(b.dataset.view)));
 
@@ -363,6 +364,7 @@ async function loadStatus() {
   s.innerHTML = `<span class="dot ${d.ok ? "ok" : "bad"}"></span><span>${d.title}</span><span class="muted">${d.sub || ""}</span>`;
   $("#loginBtn").classList.toggle("hidden", d.ok && state.status.auth.authMethod !== "api_key" ? true : false);
   $("#logoutBtn").classList.toggle("hidden", !(d.ok && state.status.auth.authMethod !== "api_key"));
+  renderActivity(state.status && state.status.activity);
   if (state.status && !state.status.git && !state.gitWarned) {
     state.gitWarned = true;
     toast("Git was not found. Install Git for Windows to run code reviews.", true);
@@ -1191,8 +1193,9 @@ async function loadSettings() {
   $$("#modelSel button").forEach((b) => b.classList.toggle("active", b.dataset.model === (s.model || "")));
   renderArchive(s);
   $("#autoUpdate").checked = s.auto_update !== false;
-  if (st) $("#curVersion").textContent = st.version;
+  if (document.activeElement !== $("#workEmail")) $("#workEmail").value = s.work_email || "";
   const st = state.status;
+  if (st) $("#curVersion").textContent = st.version;
   if (st) {
     $("#about").innerHTML = st.reviews.map((r) => `<div class="skill"><b></b><span class="muted small"></span></div>`).join("") +
       `<div class="skill"><b>ReviewKit</b><span class="muted small">Version ${st.version}</span></div>`;
@@ -1417,6 +1420,215 @@ $("#autoUpdate").addEventListener("change", async (e) => {
   try { await getJSON("/api/settings", { method: "POST", body: { auto_update: e.target.checked } }); toast(e.target.checked ? "Automatic updates on" : "Automatic updates off"); }
   catch (err) { toast(err.message, true); }
 });
+
+// ---------- activity log (Supabase) ----------
+function renderActivity(a) {
+  const on = !!(a && a.enabled);
+  $("#activityCard").classList.toggle("hidden", !on);
+  $("#adminNav").classList.toggle("hidden", !(on && a.admin));
+  $("#blockedOverlay").classList.toggle("hidden", !(on && a.email && a.active === false));
+  if (!on) return;
+  $("#blEmail").textContent = a.email || "this account";
+  $("#workEmailField").classList.toggle("hidden", !(state.status && state.status.auth && state.status.auth.authMethod === "api_key"));
+  const line = $("#activityStatus");
+  const [cls, text, sub] = a.needs_email ? ["bad", "Enter your work e-mail below", ""]
+    : !a.email ? ["", "Sign in to Claude first", ""]
+    : ["ok", `Logged as ${a.email}`, a.offline ? "offline · sent when you're back online" : (a.admin ? "admin" : "")];
+  line.innerHTML = `<span class="dot ${cls}"></span><span></span><span class="muted"></span>`;
+  $$("span", line)[1].textContent = text;
+  $$("span", line)[2].textContent = sub;
+}
+$("#blRetry").onclick = guarded(async () => { await loadStatus(); });
+$("#saveWorkEmail").onclick = guarded(async () => {
+  const email = $("#workEmail").value.trim();
+  if (!/^[^@\s;,]+@[^@\s;,]+\.[^@\s;,]+$/.test(email)) return toast("Enter a valid work e-mail address.", true);
+  try {
+    await getJSON("/api/settings", { method: "POST", body: { work_email: email } });
+    await loadStatus();
+    toast("Work e-mail saved");
+  } catch (e) { toast(e.message, true); }
+});
+
+// ---------- users & activity (admin page) ----------
+const ACTIONS = {
+  "app.open": ["Opened ReviewKit", ""],
+  "app.update": ["Updated ReviewKit", ""],
+  "claude.sign_in": ["Signed in to Claude", ""],
+  "claude.sign_out": ["Signed out of Claude", ""],
+  "code_review.run": ["Code review", "review"],
+  "code_review.apply": ["Applied code points", "change"],
+  "code_review.undo": ["Undid applied points", "change"],
+  "td_review.run": ["TD review", "review"],
+  "td_review.apply": ["Applied TD points", "change"],
+  "td_review.save_document": ["Saved reviewed TD", ""],
+  "pr.create": ["Pull request", "change"],
+  "history.export": ["Exported review", ""],
+  "history.delete": ["Deleted review", "danger"],
+  "history.clear": ["Cleared history", "danger"],
+  "settings.change": ["Changed settings", ""],
+};
+const admin = { users: [], logs: [], more: false, loaded: false };
+const fmtWhen = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso), now = new Date();
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (d.toDateString() === now.toDateString()) return `Today ${time}`;
+  return `${d.toLocaleDateString([], { day: "numeric", month: "short", year: d.getFullYear() === now.getFullYear() ? undefined : "numeric" })} ${time}`;
+};
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+function describeEvent(e) {
+  const d = e.details || {};
+  switch (e.action) {
+    case "code_review.run":
+      return [d.repo, d.source && d.target && `${d.source} → ${d.target}`, d.points != null && plural(d.points, "point") + (d.critical ? ` (${d.critical} critical)` : ""),
+        d.seconds && `${Math.round(d.seconds)}s`].filter(Boolean).join(" · ");
+    case "td_review.run":
+      return [d.document, d.points != null && plural(d.points, "point") + (d.critical ? ` (${d.critical} critical)` : ""), d.seconds && `${Math.round(d.seconds)}s`].filter(Boolean).join(" · ");
+    case "code_review.apply":
+    case "td_review.apply":
+      return [d.repo || d.document, d.source, `${d.applied || 0} of ${d.selected || 0} applied`,
+        d.needs_input && `${d.needs_input} need input`, d.failed && `${d.failed} failed`, d.files != null && plural(d.files, "file")].filter(Boolean).join(" · ");
+    case "pr.create":
+      return [`${d.existing ? "Reused" : "Created"} PR ${d.pr_id}`, d.repo, d.source && `${d.source} → ${d.target}`, d.reviewers && plural(d.reviewers, "reviewer")].filter(Boolean).join(" · ");
+    case "history.clear": return plural(d.deleted || 0, "review") + " deleted";
+    case "settings.change": return (d.keys || []).join(", ");
+    case "app.update": return d.from_version ? `from ${d.from_version}` : "";
+    default:
+      return Object.entries(d).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`).join(" · ");
+  }
+}
+function adminLocked(locked) {
+  $("#adminGate").classList.toggle("hidden", !locked);
+  $("#adminPanel").classList.toggle("hidden", locked);
+  $("#adminTools").classList.toggle("hidden", locked);
+}
+async function loadAdmin() {
+  let s;
+  try { s = await getJSON("/api/admin/session"); } catch (e) { return toast(e.message, true); }
+  if (!s.signed_in) {
+    adminLocked(true);
+    const em = $("#adminEmail");
+    if (!em.value) em.value = (state.status && state.status.activity && state.status.activity.email) || "";
+    return;
+  }
+  adminLocked(false);
+  if (!admin.loaded) await refreshAdmin();
+}
+async function adminFetch(path, opts) {
+  try { return await getJSON(path, opts); }
+  catch (e) {
+    if (/Sign in to the Users page|session expired/.test(e.message)) adminLocked(true);
+    throw e;
+  }
+}
+async function refreshAdmin() {
+  try {
+    admin.users = await adminFetch("/api/admin/users");
+    admin.loaded = true;
+    renderUsers();
+    await loadLogs(false);
+  } catch (e) { toast(e.message, true); }
+}
+function renderUsers() {
+  $("#adminUserCount").textContent = String(admin.users.length);
+  const me = (state.status && state.status.activity && state.status.activity.email) || "";
+  const body = $("#adminUsers tbody");
+  body.innerHTML = admin.users.length ? "" : `<tr><td colspan="6" class="empty">No one has used ReviewKit yet.</td></tr>`;
+  admin.users.forEach((u) => {
+    const tr = document.createElement("tr");
+    tr.className = u.is_active ? "" : "off";
+    tr.innerHTML = `<td class="who"><a></a><span class="muted small"></span></td><td></td><td class="small"></td>
+      <td class="nowrap"></td><td class="nowrap muted"></td><td><label class="toggle"><input type="checkbox"><span></span></label></td>`;
+    const tds = $$("td", tr);
+    $("a", tds[0]).textContent = u.email;
+    $("a", tds[0]).title = "Show this user's activity";
+    $("a", tds[0]).onclick = () => { $("#adminLogUser").value = u.email; loadLogs(false); };
+    $("span", tds[0]).textContent = u.auth_method === "api_key" ? "API key" : "";
+    tds[1].textContent = u.claude_org || "—";
+    tds[2].textContent = [u.machine, u.app_version].filter(Boolean).join(" · ") || "—";
+    tds[3].textContent = fmtWhen(u.last_seen);
+    tds[4].textContent = fmtWhen(u.first_seen);
+    const box = $("input", tds[5]), lbl = $("span", tds[5]);
+    box.checked = u.is_active;
+    lbl.textContent = u.is_active ? "Allowed" : "Turned off";
+    if (u.email === me) { box.disabled = true; box.parentElement.title = "You can't turn off your own access."; }
+    box.onchange = guarded(async () => {
+      const on = box.checked;
+      if (!on && !await ask({
+        title: `Turn off ${u.email}?`,
+        message: "They can't run reviews, apply points or create pull requests until you turn them back on. It takes effect within about 10 minutes, or as soon as they restart ReviewKit.",
+        ok: "Turn off", danger: true,
+      })) { box.checked = true; return; }
+      try {
+        const row = await adminFetch("/api/admin/users/active", { method: "POST", body: { email: u.email, active: on } });
+        Object.assign(u, row);
+        renderUsers();
+        toast(on ? `${u.email} can use ReviewKit again` : `${u.email} is turned off`);
+      } catch (e) { box.checked = !on; toast(e.message, true); }
+    });
+    body.appendChild(tr);
+  });
+  const sel = $("#adminLogUser"), keep = sel.value;
+  sel.innerHTML = `<option value="">Everyone</option>`;
+  admin.users.forEach((u) => { const o = document.createElement("option"); o.value = o.textContent = u.email; sel.appendChild(o); });
+  sel.value = admin.users.some((u) => u.email === keep) ? keep : "";
+  const act = $("#adminLogAction");
+  if (act.options.length === 1) {
+    Object.entries(ACTIONS).forEach(([k, [label]]) => { const o = document.createElement("option"); o.value = k; o.textContent = label; act.appendChild(o); });
+  }
+}
+async function loadLogs(older) {
+  const q = new URLSearchParams();
+  if ($("#adminLogUser").value) q.set("email", $("#adminLogUser").value);
+  if ($("#adminLogAction").value) q.set("action", $("#adminLogAction").value);
+  if (older && admin.logs.length) q.set("before", admin.logs[admin.logs.length - 1].id);
+  try {
+    const rows = await adminFetch(`/api/admin/logs?${q}`);
+    admin.logs = older ? admin.logs.concat(rows) : rows;
+    admin.more = rows.length >= 200;
+  } catch (e) { return toast(e.message, true); }
+  const body = $("#adminLogs tbody");
+  body.innerHTML = admin.logs.length ? "" : `<tr><td colspan="4" class="empty">No activity yet.</td></tr>`;
+  admin.logs.forEach((e) => {
+    const [label, kind] = ACTIONS[e.action] || [e.action, ""];
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td class="nowrap"></td><td></td><td><span class="act"></span></td><td class="details"></td>`;
+    const tds = $$("td", tr);
+    tds[0].textContent = fmtWhen(e.occurred_at || e.created_at);
+    tds[0].title = `On the PC: ${e.occurred_at || "?"}\nReceived: ${e.created_at}${e.machine ? `\nPC: ${e.machine}` : ""}${e.app_version ? `\nVersion: ${e.app_version}` : ""}`;
+    tds[1].textContent = e.email;
+    $(".act", tds[2]).textContent = label;
+    if (kind) $(".act", tds[2]).classList.add(`act-${kind}`);
+    tds[3].textContent = describeEvent(e);
+    body.appendChild(tr);
+  });
+  $("#adminMore").classList.toggle("hidden", !admin.more);
+}
+$("#adminLogUser").addEventListener("change", () => loadLogs(false));
+$("#adminLogAction").addEventListener("change", () => loadLogs(false));
+$("#adminMore").onclick = guarded(() => loadLogs(true));
+$("#adminRefresh").onclick = guarded(async () => { await refreshAdmin(); toast("Refreshed"); });
+$("#adminLock").onclick = guarded(async () => {
+  await api("/api/admin/sign-out", { method: "POST" });
+  admin.loaded = false;
+  $("#adminPassword").value = "";
+  adminLocked(true);
+});
+const adminSignIn = guarded(async () => {
+  const email = $("#adminEmail").value.trim(), password = $("#adminPassword").value;
+  if (!email || !password) return toast("Enter the admin e-mail and password.", true);
+  const btn = $("#adminSignIn");
+  busy(btn, true, "Signing in");
+  try {
+    await api("/api/admin/sign-in", { method: "POST", body: { email, password } });
+    $("#adminPassword").value = "";
+    adminLocked(false);
+    await refreshAdmin();
+  } catch (e) { toast(e.message, true); }
+  finally { busy(btn, false); }
+});
+$("#adminSignIn").onclick = adminSignIn;
+[$("#adminEmail"), $("#adminPassword")].forEach((el) => el.addEventListener("keydown", (e) => { if (e.key === "Enter") adminSignIn(); }));
 
 // ---------- boot ----------
 // With automatic updates on, the app stays covered until the update check is done, so an update

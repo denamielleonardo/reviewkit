@@ -64,10 +64,21 @@ jobs:
       - name: Stamp build version
         timeout-minutes: 1
         shell: pwsh
+        env:
+          # Users and activity log (app/activity.py). Repository variables, not secrets: the anon /
+          # publishable key is public by design and protected by the database rules. Never the service-role key.
+          SUPABASE_URL: ${{ vars.REVIEWKIT_SUPABASE_URL }}
+          SUPABASE_KEY: ${{ vars.REVIEWKIT_SUPABASE_KEY }}
         run: |
           $version = "1.0.${{ github.run_number }}"
           $sha = "${{ github.sha }}".Substring(0, 7)
-          "VERSION = `"$version`"`nCOMMIT = `"$sha`"`n" | Set-Content -Encoding utf8 app/_build.py
+          if ($env:SUPABASE_KEY -and $env:SUPABASE_KEY.StartsWith("sb_secret_")) {
+            Write-Output "::error::REVIEWKIT_SUPABASE_KEY is a secret key. Use the anon or publishable key."; exit 1
+          }
+          $url = ($env:SUPABASE_URL + "").Trim() -replace '[^A-Za-z0-9:/._-]', ''
+          $key = ($env:SUPABASE_KEY + "").Trim() -replace '[^A-Za-z0-9._-]', ''
+          if (-not $url -or -not $key) { Write-Output "Supabase not configured: users and activity log are off in this build." }
+          "VERSION = `"$version`"`nCOMMIT = `"$sha`"`nSUPABASE_URL = `"$url`"`nSUPABASE_KEY = `"$key`"`n" | Set-Content -Encoding utf8 app/_build.py
           "REVIEWKIT_VERSION=$version" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "REVIEWKIT_COMMIT=$sha" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
