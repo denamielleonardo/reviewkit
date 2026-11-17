@@ -578,6 +578,9 @@ label.point:hover { border-color: var(--border-strong); }
 .ov-actions:not(:has(.btn:not(.hidden))) { display: none; }
 .bar { width: 100%; height: 6px; border-radius: 999px; background: var(--surface-2); overflow: hidden; margin: 8px 0 4px; }
 .bar span { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 999px; transition: width .2s; }
+.bar.indeterminate span { width: 35%; transition: none; animation: bar-slide 1.1s ease-in-out infinite; }
+@keyframes bar-slide { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+@media (prefers-reduced-motion: reduce) { .bar.indeterminate span { animation: none; width: 100%; opacity: .5; } }
 
 /* ---------- detected review type (read-only) ---------- */
 .detected {

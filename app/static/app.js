@@ -1343,7 +1343,7 @@ async function checkUpdate({ boot = false, manual = false } = {}) {
 
   let autoUpdate = true;
   try { autoUpdate = (await getJSON("/api/settings")).auto_update !== false; } catch (e) {}
-  if (boot && autoUpdate && u.can_install && !reviewRunning()) return installUpdate();
+  if (boot && autoUpdate && u.can_install && !reviewRunning() && !bootGate.skipped) return installUpdate();
   $("#updateText").textContent = `ReviewKit ${u.latest} is available (you have ${u.current}).` +
     (u.can_install ? "" : ` ${u.reason || ""}`);
   $("#updateNow").classList.toggle("hidden", !u.can_install);
@@ -1357,6 +1357,7 @@ async function installUpdate() {
   $("#ovClose").classList.add("hidden");
   $("#ovRetry").classList.add("hidden");
   status.textContent = "Checking the latest version…";
+  bar.parentElement.classList.remove("indeterminate");
   bar.style.width = "0";
   ov.classList.remove("hidden");
   try {
@@ -1418,8 +1419,42 @@ $("#autoUpdate").addEventListener("change", async (e) => {
 });
 
 // ---------- boot ----------
+// With automatic updates on, the app stays covered until the update check is done, so an update
+// can't take over the window while someone is already working. A slow check can be skipped; an
+// update found after that is only offered in the banner.
+const bootGate = { skipped: false };
+async function bootUpdateCheck() {
+  let auto = true;
+  try { auto = (await getJSON("/api/settings")).auto_update !== false; } catch (e) {}
+  if (!auto) return checkUpdate({});
+  const ov = $("#updateOverlay"), bar = $("#ovBar"), close = $("#ovClose");
+  $("#ovTitle").textContent = "Checking for updates…";
+  $("#ovStatus").textContent = "Making sure you have the latest version of ReviewKit.";
+  $("#ovRetry").classList.add("hidden");
+  close.classList.add("hidden");
+  bar.style.width = "";
+  bar.parentElement.classList.add("indeterminate");
+  ov.classList.remove("hidden");
+  const slow = setTimeout(() => {
+    if ($("#ovTitle").textContent !== "Checking for updates…") return;  // already installing an update
+    $("#ovStatus").textContent = "The update server is slow to answer.";
+    close.textContent = "Continue without checking";
+    close.classList.remove("hidden");
+    close.onclick = () => { bootGate.skipped = true; ov.classList.add("hidden"); };
+  }, 8000);
+  try { await checkUpdate({ boot: true }); }
+  finally {
+    clearTimeout(slow);
+    close.textContent = "Continue without updating";
+    // Still checking only means no update is being installed: open the app.
+    if ($("#ovTitle").textContent === "Checking for updates…") ov.classList.add("hidden");
+    bar.parentElement.classList.remove("indeterminate");
+  }
+}
+
 (async function boot() {
   initTheme();
+  bootUpdateCheck();  // covers the app right away; the rest loads underneath
   const ok = await loadStatus();
   try {
     const s = await getJSON("/api/settings");
@@ -1428,6 +1463,5 @@ $("#autoUpdate").addEventListener("change", async (e) => {
     if (s.last_repo) { $("#repoPath").value = s.last_repo; openRepo(); }
   } catch (e) {}
   if (!ok) { show("settings"); toast("Connect your Claude account to get started."); }
-  checkUpdate({ boot: true });
   setInterval(() => checkUpdate({}), 6 * 3600 * 1000);
 })();
